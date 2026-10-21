@@ -1,0 +1,17 @@
+Name: TPM 2.0 PIN authentication
+Default: yes
+Priority: 260
+Auth-Type: Primary
+Auth:
+	[success=done authinfo_unavail=ignore default=ignore]	pam_tpm_pin.so
+Auth-Initial:
+	[success=done authinfo_unavail=ignore default=ignore]	pam_tpm_pin.so
+Account-Type: Additional
+Account:
+	optional	pam_tpm_pin.so
+Session-Type: Additional
+Session:
+	optional	pam_tpm_pin.so
+Password-Type: Additional
+Password:
+	optional	pam_tpm_pin.so

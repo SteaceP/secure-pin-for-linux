@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Secure PIN
+Comment=Configure TPM 2.0 PIN authentication for login and sudo
+Exec=tpm-pin-settings
+Icon=dialog-password-symbolic
+Terminal=false
+Type=Application
+StartupNotify=true
+Categories=Settings;System;Security;X-GNOME-Settings-Panel;
+Keywords=PIN;Security;TPM;Windows Hello;Password;Login;Sudo;Authentication;
+X-GNOME-Settings-Panel=secure-pin

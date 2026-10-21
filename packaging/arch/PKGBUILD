@@ -1,0 +1,23 @@
+# Maintainer: Secure PIN Maintainers <dev@securepin.org>
+pkgname=tpm-pin
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Windows Hello-style TPM 2.0 PIN authentication for Linux (PAM & GTK4 Settings)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/secure-pin/secure-pin-for-linux"
+license=('GPL3')
+depends=('pam' 'tpm2-tss' 'openssl' 'python' 'python-gobject' 'libadwaita')
+makedepends=('cmake' 'gcc' 'pkgconf')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cmake -B build -S "$srcdir/$pkgname-$pkgver" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr
+    cmake --build build
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+}

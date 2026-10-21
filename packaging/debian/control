@@ -1,0 +1,15 @@
+Source: tpm-pin
+Section: admin
+Priority: optional
+Maintainer: Secure PIN Maintainers <dev@securepin.org>
+Build-Depends: debhelper-compat (= 13), cmake, gcc, pkg-config, libssl-dev, libpam0g-dev | libpam0g, libtss2-dev | libtss2-esys-3.0.2-0t64
+Standards-Version: 4.6.2
+Homepage: https://github.com/secure-pin/secure-pin-for-linux
+
+Package: tpm-pin
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libpam0g, libtss2-esys-3.0.2-0t64 | libtss2-esys0, python3, python3-gi, gir1.2-adw-1, gir1.2-gtk-4.0
+Description: Windows Hello-style TPM 2.0 PIN authentication for Linux
+ Hardware-backed PIN authentication using TPM 2.0. Integrates with PAM
+ for login screen (GDM/SDDM), lock screen, sudo, and desktop keyring auto-unlock.
+ Includes a native GTK4/Libadwaita settings application.
