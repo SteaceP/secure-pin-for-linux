@@ -47,5 +47,5 @@ Includes a native GTK4/Libadwaita settings application.
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 
 %changelog
-* Wed Oct 21 2026 Secure PIN Maintainers <dev@securepin.org> - 1.0.0-1
+* Wed Oct 21 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.0-1
 - Initial release for Fedora / RHEL

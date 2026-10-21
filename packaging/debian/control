@@ -1,7 +1,7 @@
 Source: tpm-pin
 Section: admin
 Priority: optional
-Maintainer: Secure PIN Maintainers <dev@securepin.org>
+Maintainer: Secure PIN Maintainers <steace@coderage.pro>
 Build-Depends: debhelper-compat (= 13), cmake, gcc, pkg-config, libssl-dev, libpam0g-dev | libpam0g, libtss2-dev | libtss2-esys-3.0.2-0t64
 Standards-Version: 4.6.2
 Homepage: https://github.com/secure-pin/secure-pin-for-linux

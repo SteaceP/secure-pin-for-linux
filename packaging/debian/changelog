@@ -5,4 +5,4 @@ tpm-pin (1.0.0-1) unstable; urgency=medium
   * PAM module with unified prompt and GNOME Keyring auto-unlock.
   * Native GTK4/Libadwaita settings application.
 
- -- Secure PIN Maintainers <dev@securepin.org>  Wed, 21 Oct 2026 12:00:00 +0000
+ -- Secure PIN Maintainers <steace@coderage.pro>  Wed, 21 Oct 2026 12:00:00 +0000

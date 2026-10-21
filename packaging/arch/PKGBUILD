@@ -1,4 +1,4 @@
-# Maintainer: Secure PIN Maintainers <dev@securepin.org>
+# Maintainer: Secure PIN Maintainers <steace@coderage.pro>
 pkgname=tpm-pin
 pkgver=1.0.0
 pkgrel=1
