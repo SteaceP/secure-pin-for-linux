@@ -1,0 +1,4 @@
+CompileFlags:
+  Add:
+    - -Iinclude
+    - -I/home/steace/Documents/secure-pin-for-linux/include

@@ -1,7 +1,15 @@
 #ifndef _SECURITY_PAM_MODULES_H
 #define _SECURITY_PAM_MODULES_H
 
-#include <security/pam_appl.h>
+#if defined(__has_include)
+#  if __has_include(<security/pam_appl.h>)
+#    include <security/pam_appl.h>
+#  else
+#    include "pam_appl.h"
+#  endif
+#else
+#  include <security/pam_appl.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
