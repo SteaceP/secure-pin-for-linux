@@ -30,7 +30,7 @@ It integrates with **PAM** (login screen, lock screen, `sudo`, and Polkit), auto
 
 ## Directory Structure
 
-```
+```text
 secure-pin-for-linux/
 ├── CMakeLists.txt                # Universal CMake build & CPack configuration
 ├── include/                      # Core APIs and TSS2/PAM compatibility headers
@@ -73,14 +73,19 @@ secure-pin-for-linux/
 ### 1. Prerequisites
 
 - **Debian / Ubuntu**:
+
   ```bash
   sudo apt install cmake gcc pkg-config libssl-dev libpam0g python3 python3-gi gir1.2-adw-1 libtss2-esys-3.0.2-0t64 swtpm
   ```
+
 - **Fedora / RHEL**:
+
   ```bash
   sudo dnf install cmake gcc pkgconfig openssl-devel pam-devel tpm2-tss-devel python3 python3-gobject libadwaita swtpm
   ```
+
 - **Arch Linux**:
+
   ```bash
   sudo pacman -S cmake gcc pkgconf openssl pam tpm2-tss python python-gobject libadwaita swtpm
   ```
@@ -106,36 +111,47 @@ The test suite runs against your hardware TPM (if `/dev/tpmrm0` is available) or
 ## Usage
 
 ### 1. View Status
+
 ```bash
 ./build/tpm-pin-ctl status
 ```
+
 Or JSON format (used by the settings GUI):
+
 ```bash
 ./build/tpm-pin-ctl status --json
 ```
 
 ### 2. Enroll a PIN
+
 ```bash
 ./build/tpm-pin-ctl enroll
 ```
+
 You will be prompted for your current login password (to seal for desktop keyring auto-unlock) and your new PIN.
 
 ### 3. Verify PIN against TPM 2.0
+
 ```bash
 ./build/tpm-pin-ctl verify
 ```
 
 ### 4. Launch the GUI Settings Application
+
 ```bash
 ./gui/tpm-pin-settings
 ```
 
 ### 5. Enable System-Wide PAM Integration
+
 To safely activate TPM PIN authentication across login, lockscreen, and `sudo`:
+
 ```bash
 sudo ./build/tpm-pin-ctl pam enable
 ```
+
 To disable and revert PAM configuration:
+
 ```bash
 sudo ./build/tpm-pin-ctl pam disable
 ```
@@ -145,20 +161,27 @@ sudo ./build/tpm-pin-ctl pam disable
 ## Distribution Packaging
 
 - **Build `.deb` package**:
+
   ```bash
   cd build && cpack -G DEB
   ```
+
 - **Build `.tar.gz` package**:
+
   ```bash
   cd build && cpack -G TGZ
   ```
+
 - **Build `.rpm` package** (on Fedora/RHEL):
+
   ```bash
   cd build && cpack -G RPM
   # or using rpmbuild:
   rpmbuild -ba packaging/rpm/tpm-pin.spec
   ```
+
 - **Build on Arch Linux**:
+
   ```bash
   cd packaging/arch && makepkg -si
   ```
