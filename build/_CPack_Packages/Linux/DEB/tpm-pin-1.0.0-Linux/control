@@ -6,4 +6,4 @@ Package: tpm-pin
 Priority: optional
 Section: admin
 Version: 1.0.0
-Installed-Size: 295
+Installed-Size: 327

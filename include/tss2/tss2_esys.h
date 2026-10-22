@@ -165,6 +165,23 @@ TSS2_RC Esys_FlushContext(
     ESYS_CONTEXT *esysContext,
     ESYS_TR flushHandle);
 
+TSS2_RC Esys_TRSess_SetAttributes(
+    ESYS_CONTEXT *esysContext,
+    ESYS_TR session,
+    TPMA_SESSION flags,
+    TPMA_SESSION mask);
+
+TSS2_RC Esys_GetCapability(
+    ESYS_CONTEXT *esysContext,
+    ESYS_TR shandle1,
+    ESYS_TR shandle2,
+    ESYS_TR shandle3,
+    UINT32 capability,
+    UINT32 property,
+    UINT32 propertyCount,
+    TPMI_YES_NO *moreData,
+    TPMS_CAPABILITY_DATA **capabilityData);
+
 void Esys_Free(void *ptr);
 
 #ifdef __cplusplus

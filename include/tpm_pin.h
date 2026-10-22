@@ -49,7 +49,9 @@ typedef struct {
 
 typedef struct {
     bool     tpm_present;
-    char     manufacturer[32];
+    char     manufacturer[64];
+    char     hardware_type[128];
+    char     bus_encryption[64];
     bool     is_enrolled;
     bool     is_locked_out;
     uint32_t failed_tries;

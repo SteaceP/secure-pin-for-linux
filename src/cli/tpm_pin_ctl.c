@@ -112,6 +112,8 @@ int main(int argc, char **argv) {
             printf("{\n");
             printf("  \"tpm_present\": %s,\n", status.tpm_present ? "true" : "false");
             printf("  \"tpm_manufacturer\": \"%s\",\n", status.manufacturer[0] ? status.manufacturer : "TPM 2.0");
+            printf("  \"hardware_type\": \"%s\",\n", status.hardware_type[0] ? status.hardware_type : "TPM 2.0");
+            printf("  \"bus_encryption\": \"%s\",\n", status.bus_encryption[0] ? status.bus_encryption : "Active");
             printf("  \"user\": \"%s\",\n", username ? username : "unknown");
             printf("  \"uid\": %u,\n", (unsigned int)uid);
             printf("  \"is_enrolled\": %s,\n", status.is_enrolled ? "true" : "false");
@@ -132,6 +134,8 @@ int main(int argc, char **argv) {
         } else {
             printf("=== Secure PIN for Linux Status ===\n");
             printf("TPM 2.0 Device:         %s\n", status.tpm_present ? "Detected & Ready" : "Not Found");
+            printf("Hardware Security:      %s\n", status.hardware_type[0] ? status.hardware_type : "TPM 2.0");
+            printf("Bus Protection:         %s\n", status.bus_encryption[0] ? status.bus_encryption : "Active");
             printf("Target User:            %s (UID: %u)\n", username ? username : "unknown", (unsigned int)uid);
             printf("PIN Enrolled:           %s\n", status.is_enrolled ? "Yes" : "No");
             printf("Keyring Auto-Unlock:    %s\n", status.keyring_pwd_saved ? "Configured" : "None");

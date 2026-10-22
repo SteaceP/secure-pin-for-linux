@@ -1,7 +1,7 @@
-aa294aea30228c719410461ff487d767  usr/bin/tpm-pin-ctl
-1a0b0ae3140e292e60e88cecdff16e49  usr/bin/tpm-pin-settings
-522433084bcb379fc69da321bf2fffef  usr/lib/security/pam_tpm_pin.so
-1434e79394041f8237c286a804b33794  usr/libexec/tpm-pin-verify
+7358f6993305073961f66e70492f35a1  usr/bin/tpm-pin-ctl
+31d3f2a97869afcef5c27c03fd7f6431  usr/bin/tpm-pin-settings
+15890a49b986804ef314215817491ab4  usr/lib/security/pam_tpm_pin.so
+34d68f68bf9924cacaf033ee63881240  usr/libexec/tpm-pin-verify
 b29be327e320dc8c9ae113dc7c4ec0c8  usr/share/applications/io.github.securepin.Settings.desktop
 9f7337d73f7a4938907fade3b5c304d4  usr/share/pam-configs/tpm-pin
 78ef4470cf02c739ba2a402a4180336a  usr/share/polkit-1/actions/io.github.securepin.policy

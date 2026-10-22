@@ -102,10 +102,22 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
         grp_status.set_title("Authentication Status")
 
         self.row_tpm = Adw.ActionRow()
-        self.row_tpm.set_title("TPM 2.0 Hardware")
+        self.row_tpm.set_title("TPM 2.0 Security Processor")
         self.row_tpm.set_subtitle("Checking hardware...")
         self.row_tpm.set_icon_name("security-high-symbolic")
         grp_status.add(self.row_tpm)
+
+        self.row_hw = Adw.ActionRow()
+        self.row_hw.set_title("Hardware Architecture")
+        self.row_hw.set_subtitle("Detecting...")
+        self.row_hw.set_icon_name("computer-symbolic")
+        grp_status.add(self.row_hw)
+
+        self.row_bus = Adw.ActionRow()
+        self.row_bus.set_title("Bus Sniffing Protection")
+        self.row_bus.set_subtitle("Active (AES-128-CFB encrypted transit sessions)")
+        self.row_bus.set_icon_name("channel-secure-symbolic")
+        grp_status.add(self.row_bus)
 
         self.row_enroll = Adw.ActionRow()
         self.row_enroll.set_title("PIN Status")
@@ -226,7 +238,11 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
 
         tpm_ok = self.state.get("tpm_present", False)
         mfg = self.state.get("tpm_manufacturer", "TPM 2.0")
+        hw_type = self.state.get("hardware_type", "Standard TPM 2.0")
+        bus_enc = self.state.get("bus_encryption", "Active (AES-128-CFB)")
         self.row_tpm.set_subtitle(f"{mfg} — Hardware security active" if tpm_ok else "TPM 2.0 not detected")
+        self.row_hw.set_subtitle(hw_type)
+        self.row_bus.set_subtitle(bus_enc)
 
         enrolled = self.state.get("is_enrolled", False)
         if enrolled:

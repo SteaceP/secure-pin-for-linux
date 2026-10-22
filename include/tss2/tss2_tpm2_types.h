@@ -79,6 +79,41 @@ typedef uint8_t   TPM2_SE;
 #define TPM2_SE_POLICY                  0x01
 #define TPM2_SE_TRIAL                   0x02
 
+/* Session attributes */
+#define TPMA_SESSION_CONTINUESESSION    ((TPMA_SESSION)1 << 0)
+#define TPMA_SESSION_AUDITEXCLUSIVE     ((TPMA_SESSION)1 << 1)
+#define TPMA_SESSION_AUDITRESET         ((TPMA_SESSION)1 << 2)
+#define TPMA_SESSION_DECRYPT            ((TPMA_SESSION)1 << 5)
+#define TPMA_SESSION_ENCRYPT            ((TPMA_SESSION)1 << 6)
+#define TPMA_SESSION_AUDIT              ((TPMA_SESSION)1 << 7)
+
+/* Capabilities */
+#define TPM2_CAP_TPM_PROPERTIES         ((UINT32)0x00000006)
+#define TPM2_PT_MANUFACTURER            ((UINT32)0x00000105)
+#define TPM2_PT_VENDOR_STRING_1         ((UINT32)0x00000106)
+#define TPM2_PT_VENDOR_STRING_2         ((UINT32)0x00000107)
+#define TPM2_PT_VENDOR_STRING_3         ((UINT32)0x00000108)
+#define TPM2_PT_VENDOR_STRING_4         ((UINT32)0x00000109)
+#define TPM2_PT_FIRMWARE_VERSION_1      ((UINT32)0x0000010B)
+#define TPM2_PT_FIRMWARE_VERSION_2      ((UINT32)0x0000010C)
+
+typedef struct {
+    UINT32 property;
+    UINT32 value;
+} TPMS_TAGGED_PROPERTY;
+
+typedef struct {
+    UINT32 count;
+    TPMS_TAGGED_PROPERTY tpmProperty[128];
+} TPML_TAGGED_TPM_PROPERTY;
+
+typedef struct {
+    UINT32 capability;
+    union {
+        TPML_TAGGED_TPM_PROPERTY tpmProperties;
+    } data;
+} TPMS_CAPABILITY_DATA;
+
 /* Return codes */
 #define TPM2_RC_SUCCESS                 0x000
 #define TPM2_RC_LOCKOUT                 0x921
