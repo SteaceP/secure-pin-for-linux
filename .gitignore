@@ -1,0 +1,29 @@
+# Build outputs
+build/
+dist/
+release-assets/
+_CPack_Packages/
+
+# Compiled packages
+*.deb
+*.rpm
+*.tar.gz
+*.pkg.tar.zst
+
+# Compiled objects
+*.o
+*.so
+*.a
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Temporary test artifacts
+/tmp/swtpm_test.*
+
+# IDE / Editor configuration
+.vscode/
+.idea/
+*.swp
+*~

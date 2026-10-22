@@ -150,8 +150,11 @@ set(CPACK_GENERATOR "TGZ;DEB;RPM")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Secure PIN Team <steace@coderage.pro>")
 set(CPACK_DEBIAN_PACKAGE_SECTION "admin")
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "libpam0g, python3, python3-gi, gir1.2-adw-1")
+set(CPACK_DEBIAN_FILE_NAME "DEB-DEFAULT")
 
 set(CPACK_RPM_PACKAGE_LICENSE "GPLv3+")
 set(CPACK_RPM_PACKAGE_GROUP "System Environment/Base")
+set(CPACK_RPM_PACKAGE_REQUIRES "pam, tpm2-tss, python3, python3-gobject, libadwaita")
+set(CPACK_RPM_FILE_NAME "RPM-DEFAULT")
 
 include(CPack)
