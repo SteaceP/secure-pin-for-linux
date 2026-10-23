@@ -280,9 +280,14 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
                 self.row_hw.set_subtitle("Flatpak Sandbox (Host Integration)")
                 self.row_bus.set_subtitle("Host daemon missing")
                 self.btn_enroll.set_sensitive(False)
+            elif not tpm_ok:
+                self.btn_enroll.set_sensitive(False)
+                self.row_tpm.set_subtitle("TPM 2.0 not detected — PIN enrollment disabled")
+                self.row_hw.set_subtitle(hw_type)
+                self.row_bus.set_subtitle("Inactive (No TPM device)")
             else:
                 self.btn_enroll.set_sensitive(True)
-                self.row_tpm.set_subtitle(f"{mfg} — Hardware security active" if tpm_ok else "TPM 2.0 not detected")
+                self.row_tpm.set_subtitle(f"{mfg} — Hardware security active")
                 self.row_hw.set_subtitle(hw_type)
                 self.row_bus.set_subtitle(bus_enc)
 

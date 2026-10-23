@@ -190,6 +190,13 @@ int main(int argc, char **argv) {
     }
 
     if (strcmp(action, "enroll") == 0) {
+        tpm_pin_status_t status;
+        if (tpm_pin_get_user_status(uid, &cfg, &status) && !status.tpm_present) {
+            fprintf(stderr, "Error: TPM 2.0 device was not detected or accessible on this system.\n");
+            fprintf(stderr, "Cannot enroll a hardware-backed PIN without a functional TPM 2.0.\n");
+            return 1;
+        }
+
         char *pin = NULL;
         char *pwd = NULL;
 
