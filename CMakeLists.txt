@@ -183,6 +183,8 @@ if(NOT BUILD_GUI_ONLY)
         /usr/libexec
         /usr/lib/udev
         /usr/lib/udev/rules.d
+        /usr/lib/x86_64-linux-gnu
+        /usr/lib/x86_64-linux-gnu/security
         /usr/share/applications
         /usr/share/icons
         /usr/share/icons/hicolor
@@ -191,6 +193,7 @@ if(NOT BUILD_GUI_ONLY)
         /usr/share/icons/hicolor/symbolic
         /usr/share/icons/hicolor/symbolic/apps
         /usr/share/metainfo
+        /usr/share/pam-configs
         /usr/share/polkit-1
         /usr/share/polkit-1/actions
     )

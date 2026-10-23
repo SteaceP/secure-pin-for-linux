@@ -2,4 +2,7 @@ if [ $1 -eq 0 ]; then
     if [ -x /usr/bin/tpm-pin-ctl ]; then
         /usr/bin/tpm-pin-ctl pam disable >/dev/null 2>&1 || :
     fi
+    if [ -L /usr/lib64/security/pam_tpm_pin.so ]; then
+        rm -f /usr/lib64/security/pam_tpm_pin.so
+    fi
 fi

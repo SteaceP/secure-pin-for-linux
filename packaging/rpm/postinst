@@ -1,4 +1,8 @@
 if [ $1 -eq 1 ]; then
+    if [ ! -f /usr/lib64/security/pam_tpm_pin.so ] && [ -f /usr/lib/x86_64-linux-gnu/security/pam_tpm_pin.so ]; then
+        mkdir -p /usr/lib64/security
+        ln -sf /usr/lib/x86_64-linux-gnu/security/pam_tpm_pin.so /usr/lib64/security/pam_tpm_pin.so
+    fi
     if [ -x /usr/bin/tpm-pin-ctl ]; then
         /usr/bin/tpm-pin-ctl pam enable >/dev/null 2>&1 || :
     fi

@@ -33,6 +33,9 @@ Includes a native GTK4/Libadwaita settings application.
 
 %install
 %cmake_install
+mkdir -p %{buildroot}%{_sharedstatedir}/tpm-pin
+mkdir -p %{buildroot}%{_sysconfdir}/tpm-pin
+rm -rf %{buildroot}%{_datadir}/pam-configs
 
 %post
 if [ $1 -eq 1 ]; then
