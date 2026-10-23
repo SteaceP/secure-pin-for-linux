@@ -12,6 +12,7 @@ DO_CLEAN=false
 CLEAN_ONLY=false
 DO_TEST=false
 BUILD_ARCH=false
+BUILD_FLATPAK=false
 JOBS="$(nproc 2>/dev/null || echo 2)"
 PREFIX="/usr"
 
@@ -29,6 +30,7 @@ Options:
   -t, --test          Run automated test suite before packaging
   -d, --debug         Build with Debug configuration (default: Release)
   --arch              Build Arch Linux package (pkg.tar.zst) via Docker
+  --flatpak           Build Flatpak package (.flatpak) via flatpak-builder
   -j, --jobs <N>      Number of parallel compile jobs (default: nproc)
   --prefix <path>     Installation prefix for CMake (default: /usr)
   -h, --help          Show this help message
@@ -66,6 +68,10 @@ while [[ $# -gt 0 ]]; do
             BUILD_ARCH=true
             shift
             ;;
+        --flatpak)
+            BUILD_FLATPAK=true
+            shift
+            ;;
         -j|--jobs)
             JOBS="$2"
             shift 2
@@ -88,7 +94,8 @@ cd "$ROOT_DIR"
 
 if [ "$DO_CLEAN" = true ] || [ "$CLEAN_ONLY" = true ]; then
     echo "Cleaning build artifacts and release outputs..."
-    rm -rf "$BUILD_DIR" "$ROOT_DIR/build-release" "$DIST_DIR" "$ROOT_DIR/release-assets"
+    rm -rf "$BUILD_DIR" "$ROOT_DIR/build-release" "$DIST_DIR" "$ROOT_DIR/release-assets" \
+           "$ROOT_DIR/build-flatpak" "$ROOT_DIR/flatpak-repo" "$ROOT_DIR/.flatpak-builder"
     rm -f -- "$ROOT_DIR/-.o"
     if [ "$CLEAN_ONLY" = true ]; then
         echo "Clean complete."
@@ -167,9 +174,23 @@ if [ "$DO_PACKAGE" = true ]; then
         fi
     fi
 
+    if [ "$BUILD_FLATPAK" = true ]; then
+        if command -v flatpak-builder >/dev/null 2>&1; then
+            echo "Building Flatpak package via flatpak-builder..."
+            VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+            [ -z "$VERSION" ] && VERSION="1.0.2"
+            mkdir -p "$ROOT_DIR/build-flatpak" "$ROOT_DIR/flatpak-repo"
+            flatpak-builder --force-clean --repo="$ROOT_DIR/flatpak-repo" "$ROOT_DIR/build-flatpak" packaging/flatpak/io.github.securepin.Settings.yml
+            flatpak build-bundle "$ROOT_DIR/flatpak-repo" "$DIST_DIR/io.github.securepin.Settings-${VERSION}.flatpak" io.github.securepin.Settings
+            rm -rf "$ROOT_DIR/build-flatpak" "$ROOT_DIR/flatpak-repo"
+        else
+            echo "flatpak-builder not found, skipping Flatpak package generation."
+        fi
+    fi
+
     pushd "$DIST_DIR" >/dev/null
     shopt -s nullglob
-    DIST_FILES=(*.deb *.rpm *.tar.gz *.pkg.tar.zst)
+    DIST_FILES=(*.deb *.rpm *.tar.gz *.pkg.tar.zst *.flatpak)
     if [ ${#DIST_FILES[@]} -gt 0 ]; then
         sha256sum "${DIST_FILES[@]}" > SHA256SUMS.txt
     fi
@@ -190,6 +211,7 @@ if [ "$DO_PACKAGE" = true ]; then
             *.rpm) target="Fedora / RHEL" ;;
             *.tar.gz) target="Universal Archive" ;;
             *.pkg.tar.zst) target="Arch Linux" ;;
+            *.flatpak) target="Flatpak Bundle" ;;
             SHA256SUMS.txt) target="SHA-256 Checksums" ;;
             *) target="Release File" ;;
         esac

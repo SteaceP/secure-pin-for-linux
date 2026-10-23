@@ -1,0 +1,35 @@
+app-id: io.github.securepin.Settings
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: tpm-pin-settings
+
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --talk-name=org.freedesktop.Flatpak
+  - --talk-name=org.freedesktop.Notifications
+  - --filesystem=xdg-run/dconf
+  - --talk-name=ca.desrt.dconf
+  - --env=DCONF_USER_CONFIG_DIR=.config/dconf
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /man
+  - /share/doc
+  - /share/man
+  - '*.la'
+  - '*.a'
+
+modules:
+  - name: tpm-pin-settings
+    buildsystem: cmake
+    builddir: true
+    config-opts:
+      - -DBUILD_GUI_ONLY=ON
+    sources:
+      - type: dir
+        path: ../../

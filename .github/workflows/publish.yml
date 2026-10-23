@@ -22,6 +22,53 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
+  check-version:
+    name: Check Version & Release Eligibility
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      tag_name: ${{ steps.check.outputs.tag_name }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Determine if this commit is a release
+        id: check
+        run: |
+          VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          if [ -z "$VERSION" ]; then VERSION="1.0.2"; fi
+          TAG="v${VERSION}"
+          echo "Current project version: ${VERSION}"
+
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "Direct tag push detected: ${GITHUB_REF_NAME}"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "tag_name=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+            echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish_release }}" == "true" ]]; then
+            echo "Manual workflow dispatch release triggered for: ${TAG}"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
+            echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            git fetch --tags origin || true
+            if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1 || [ -n "$(git tag -l "${TAG}")" ]; then
+              echo "Tag ${TAG} already exists on remote. Normal commit on main — skipping release."
+              echo "should_release=false" >> $GITHUB_OUTPUT
+            else
+              echo "Version bump detected (${TAG}) without an existing release tag! Publishing release."
+              echo "should_release=true" >> $GITHUB_OUTPUT
+              echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
+              echo "version=${VERSION}" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "Not on main or release tag — skipping release."
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
   test:
     name: Run Automated Tests
     runs-on: ubuntu-24.04
@@ -151,10 +198,47 @@ jobs:
           path: dist/*.pkg.tar.zst
           if-no-files-found: error
 
+  build-flatpak-package:
+    name: Build Flatpak Package (.flatpak)
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Flatpak & flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub org.gnome.Platform//50 org.gnome.Sdk//50
+
+      - name: Build Flatpak Bundle
+        run: |
+          mkdir -p dist build-flatpak repo
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+            if [ -z "$VERSION" ]; then VERSION="1.0.2"; fi
+          fi
+
+          flatpak-builder --user --force-clean --repo=repo build-flatpak packaging/flatpak/io.github.securepin.Settings.yml
+          flatpak build-bundle repo dist/io.github.securepin.Settings-${VERSION}.flatpak io.github.securepin.Settings
+          echo "Generated Flatpak bundle:"
+          ls -lh dist/
+
+      - name: Upload Flatpak Package Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: flatpak-package
+          path: dist/*.flatpak
+          if-no-files-found: error
+
   publish-release:
     name: Publish Release
-    needs: [build-linux-packages, build-arch-package]
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    needs: [check-version, build-linux-packages, build-arch-package, build-flatpak-package]
+    if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -179,12 +263,15 @@ jobs:
       - name: Determine Release Tag
         id: release_info
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            TAG_NAME="${{ github.ref_name }}"
-          else
-            VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-            if [ -z "$VERSION" ]; then VERSION="1.0.2"; fi
-            TAG_NAME="v${VERSION}-$(date +'%Y%m%d%H%M%S')"
+          TAG_NAME="${{ needs.check-version.outputs.tag_name }}"
+          if [ -z "$TAG_NAME" ]; then
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+              TAG_NAME="${{ github.ref_name }}"
+            else
+              VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+              if [ -z "$VERSION" ]; then VERSION="1.0.2"; fi
+              TAG_NAME="v${VERSION}"
+            fi
           fi
           echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
 
@@ -192,6 +279,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.release_info.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
           name: Release ${{ steps.release_info.outputs.tag_name }}
           files: |
             release-assets/*

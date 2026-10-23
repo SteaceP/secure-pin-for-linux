@@ -4,12 +4,17 @@ build-*/
 dist/
 release-assets/
 _CPack_Packages/
+.flatpak-builder/
+flatpak-repo/
 
 # Compiled packages
 *.deb
 *.rpm
 *.tar.gz
 *.pkg.tar.zst
+*.flatpak
+*.flatpakref
+*.flatpakrepo
 
 # Compiled objects
 *.o
@@ -28,3 +33,7 @@ __pycache__/
 .idea/
 *.swp
 *~
+
+# Text files (exempting CMakeLists.txt)
+*.txt
+!CMakeLists.txt

@@ -20,10 +20,11 @@ It integrates with **PAM** (login screen, lock screen, `sudo`, and Polkit), auto
   - Matches the GNOME Settings look and feel (`AdwPreferencesWindow`).
   - Configure PIN enrollment, change/remove PIN, per-service toggles (`sudo`, login screen, lock screen, keyring auto-unlock), PIN complexity policies (digits-only vs. alphanumeric, min/max length), and reset TPM lockout counters.
   - Registers under `Settings;System;Security;` in application launchers.
-- **Cross-Distribution Support**:
+- **Cross-Distribution & Packaging Support**:
   - Debian / Ubuntu (`.deb`, `pam-auth-update` profile).
   - Fedora / RHEL / CentOS (`.rpm`, `system-auth` / `password-auth`).
   - Arch Linux (`PKGBUILD`).
+  - Flatpak bundle (`io.github.securepin.Settings`) for sandboxed desktop environments.
   - Universal CMake build system.
 
 ---
@@ -54,13 +55,15 @@ secure-pin-for-linux/
 ├── gui/
 │   ├── tpm-pin-settings          # GTK4 / Libadwaita settings application
 │   ├── io.github.securepin.Settings.desktop
+│   ├── io.github.securepin.Settings.metainfo.xml
 │   ├── io.github.securepin.policy
 │   └── gnome-extension/          # GNOME Shell quick-settings toggle
 ├── packaging/
 │   ├── pam-configs/tpm-pin       # pam-auth-update profile for Debian/Ubuntu
 │   ├── debian/                   # Debian package metadata
 │   ├── rpm/tpm-pin.spec          # RPM spec file for Fedora/RHEL
-│   └── arch/PKGBUILD             # Arch Linux PKGBUILD
+│   ├── arch/PKGBUILD             # Arch Linux PKGBUILD
+│   └── flatpak/                  # Flatpak builder manifest & build automation
 └── tests/
     ├── test_pam_harness.c        # Automated unit & integration tests
     └── run_tests.sh              # swtpm/TPM test runner
@@ -194,6 +197,8 @@ The easiest way to generate all packages locally is via the build script, which 
 
 To build individual packages manually:
 
+- **Build `.deb` package**:
+
   ```bash
   cd build && cpack -G DEB
   ```
@@ -218,9 +223,16 @@ To build individual packages manually:
   cd packaging/arch && makepkg -si
   ```
 
-- **Automated CI/CD & GitHub Releases**:
+- **Build Flatpak package (`.flatpak`)**:
 
-  Pushing a version tag (e.g. `git tag v1.0.2 && git push origin v1.0.2`) or running the **Publish Packages** action manually triggers the GitHub Actions workflow, which automatically compiles and publishes `.deb`, `.rpm`, `.pkg.tar.zst`, `.tar.gz`, and `SHA256SUMS.txt` to GitHub Releases.
+  ```bash
+  # Using the build script:
+  ./build.sh --flatpak
+  # Or via the standalone Flatpak helper:
+  ./packaging/flatpak/build-flatpak.sh --bundle
+  # Or install locally for the current user:
+  ./packaging/flatpak/build-flatpak.sh --install
+  ```
 
 ---
 

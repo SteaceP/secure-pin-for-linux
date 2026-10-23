@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.securepin.Settings</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Secure PIN Settings</name>
+  <summary>Configure TPM 2.0 PIN authentication for Linux</summary>
+  <description>
+    <p>
+      Secure PIN for Linux provides a Windows Hello–style, hardware-backed PIN
+      authentication system using TPM 2.0. It integrates with PAM for login, lock
+      screen, sudo, and desktop keyring auto-unlock.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Hardware-backed security: PIN master encryption keys sealed in TPM 2.0</li>
+      <li>Dictionary Attack protection: Hardware anti-hammering lockout</li>
+      <li>Unified authentication: Single prompt for PIN or system password</li>
+      <li>Desktop keyring auto-unlock: Automatically unlock GNOME Keyring and KWallet</li>
+      <li>Secure Boot (PCR 7) integrity binding</li>
+      <li>Configurable PIN complexity policy (digits-only, custom lengths)</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.securepin.Settings.desktop</launchable>
+  <url type="homepage">https://github.com/steacep/secure-pin-for-linux</url>
+  <url type="bugtracker">https://github.com/steacep/secure-pin-for-linux/issues</url>
+  <developer id="io.github.securepin">
+    <name>Secure PIN Team</name>
+  </developer>
+  <provides>
+    <binary>tpm-pin-settings</binary>
+  </provides>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="1.0.2" date="2026-10-23">
+      <description>
+        <p>Release 1.0.2: Flatpak support, udev permissions, and security hardening.</p>
+      </description>
+    </release>
+    <release version="1.0.1" date="2026-10-23">
+      <description>
+        <p>Release 1.0.1: Security hardening and hardware detection improvements.</p>
+      </description>
+    </release>
+    <release version="1.0.0" date="2026-10-21">
+      <description>
+        <p>Initial release of Secure PIN for Linux.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -218,6 +218,8 @@ Commit messages follow the [Conventional Commits](https://www.conventionalcommit
 
    ```bash
    ./build.sh
+   # Or to test the Flatpak build:
+   ./packaging/flatpak/build-flatpak.sh --bundle
    ```
 
 5. Open a Pull Request against `main`. Provide a clear description of the problem solved, the implementation details, and any test results.
