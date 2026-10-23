@@ -134,8 +134,12 @@ static bool insert_pam_rule(const char *filepath, const char *rule, const char *
         if (!inserted && before_needle && strstr(line, before_needle) && !strstr(line, "pam_tpm_pin.so")) {
             const char *succ = strstr(line, "success=");
             if (succ) {
-                int jump = atoi(succ + 8) + 1;
-                fprintf(out, "auth\t[success=%d authinfo_unavail=ignore open_err=ignore default=ignore]\tpam_tpm_pin.so\n", jump);
+                int jump_val = atoi(succ + 8);
+                if (jump_val > 0) {
+                    fprintf(out, "auth\t[success=%d authinfo_unavail=ignore open_err=ignore default=ignore]\tpam_tpm_pin.so\n", jump_val + 1);
+                } else {
+                    fprintf(out, "%s\n", rule);
+                }
             } else {
                 fprintf(out, "%s\n", rule);
             }
