@@ -241,15 +241,20 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
 
     chmod(tmp_path, 0600);
     if (getuid() == 0 && uid != 0) {
-        chown(dir_path, uid, (gid_t)-1);
-        chown(tmp_path, uid, (gid_t)-1);
+        if (chown(dir_path, uid, (gid_t)-1) != 0 || chown(tmp_path, uid, (gid_t)-1) != 0) {
+            unlink(tmp_path);
+            return false;
+        }
     }
     if (rename(tmp_path, blob_path) != 0) {
         unlink(tmp_path);
         return false;
     }
     if (getuid() == 0 && uid != 0) {
-        chown(blob_path, uid, (gid_t)-1);
+        if (chown(blob_path, uid, (gid_t)-1) != 0) {
+            unlink(blob_path);
+            return false;
+        }
     }
 
     return true;

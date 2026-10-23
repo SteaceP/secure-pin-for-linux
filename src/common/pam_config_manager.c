@@ -256,7 +256,8 @@ bool pam_manager_disable(char *err_buf, size_t err_len) {
 
     if (distro == DISTRO_DEBIAN_UBUNTU) {
         if (access("/usr/share/pam-configs/tpm-pin", R_OK) == 0 && access("/usr/sbin/pam-auth-update", X_OK) == 0) {
-            system("/usr/sbin/pam-auth-update --package --remove tpm-pin >/dev/null 2>&1");
+            int ret = system("/usr/sbin/pam-auth-update --package --remove tpm-pin >/dev/null 2>&1");
+            (void)ret;
         }
         if (access("/etc/pam.d/common-auth", W_OK) == 0) {
             remove_pam_rule("/etc/pam.d/common-auth");
