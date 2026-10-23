@@ -143,7 +143,7 @@ if [ "$DO_PACKAGE" = true ]; then
         if command -v docker >/dev/null 2>&1; then
             echo "Building Arch Linux package via Docker..."
             VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-            [ -z "$VERSION" ] && VERSION="1.0.1"
+            [ -z "$VERSION" ] && VERSION="1.0.2"
             docker run --rm \
                 -v "$ROOT_DIR:/src:ro" \
                 -v "$DIST_DIR:/out" \

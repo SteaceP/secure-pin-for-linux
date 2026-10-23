@@ -220,7 +220,7 @@ To build individual packages manually:
 
 - **Automated CI/CD & GitHub Releases**:
 
-  Pushing a version tag (e.g. `git tag v1.0.1 && git push origin v1.0.1`) or running the **Publish Packages** action manually triggers the GitHub Actions workflow, which automatically compiles and publishes `.deb`, `.rpm`, `.pkg.tar.zst`, `.tar.gz`, and `SHA256SUMS.txt` to GitHub Releases.
+  Pushing a version tag (e.g. `git tag v1.0.2 && git push origin v1.0.2`) or running the **Publish Packages** action manually triggers the GitHub Actions workflow, which automatically compiles and publishes `.deb`, `.rpm`, `.pkg.tar.zst`, `.tar.gz`, and `SHA256SUMS.txt` to GitHub Releases.
 
 ---
 

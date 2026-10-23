@@ -1,3 +1,13 @@
+tpm-pin (1.0.2-1) unstable; urgency=medium
+
+  * Define pam_info and pam_error as macros and enforce link safety in PAM module.
+  * Check chown return values and handle system call results cleanly.
+  * Add uaccess udev rule for TPM device access and document permissions.
+  * Add application icons, build packaging script, and desktop integration assets.
+  * Update GNOME Shell extension metadata, UUID, URL, and Shell 51 support.
+
+ -- Secure PIN Maintainers <steace@coderage.pro>  Fri, 23 Oct 2026 07:07:00 -0400
+
 tpm-pin (1.0.1-1) unstable; urgency=medium
 
   * Fix PCR 7 policy bypass and enforce Esys_PolicyAuthValue.

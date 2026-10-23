@@ -1,7 +1,7 @@
 {
   "name": "Secure PIN Quick Settings",
   "description": "Quick settings shortcut to manage your TPM 2.0 PIN for login and sudo",
-  "uuid": "secure-pin@github.io",
-  "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "url": "https://github.com/secure-pin/secure-pin-for-linux"
+  "uuid": "secure-pin@coderage.pro",
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
+  "url": "https://github.com/steacep/secure-pin-for-linux"
 }

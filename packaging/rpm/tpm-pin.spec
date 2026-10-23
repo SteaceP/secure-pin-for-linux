@@ -1,10 +1,10 @@
 Name:           tpm-pin
-Version:        1.0.1
+Version:        1.0.2
 Release:        1%{?dist}
 Summary:        Windows Hello-style TPM 2.0 PIN authentication for Linux
 
 License:        GPL-3.0-or-later
-URL:            https://github.com/secure-pin/secure-pin-for-linux
+URL:            https://github.com/steacep/secure-pin-for-linux
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  gcc
@@ -49,6 +49,13 @@ Includes a native GTK4/Libadwaita settings application.
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 
 %changelog
+* Fri Oct 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.2-1
+- Define pam_info and pam_error as macros and enforce link safety in PAM module
+- Check chown return values and handle system call results cleanly
+- Add uaccess udev rule for TPM access and document user permissions
+- Add application icons, build packaging script, and desktop integration
+- Update GNOME Shell extension metadata, UUID, URL, and Shell 51 support
+
 * Fri Oct 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.1-1
 - Security hardening: PCR 7 policy enforcement, AES-128-CFB encrypted sessions
 - Add Microsoft Pluton, AMD PSP, and Intel PTT hardware fTPM detection

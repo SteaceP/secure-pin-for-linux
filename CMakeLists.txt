@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(tpm-pin VERSION 1.0.1 LANGUAGES C)
+project(tpm-pin VERSION 1.0.2 LANGUAGES C)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 17)
@@ -159,7 +159,7 @@ install(FILES packaging/udev/70-tpm-pin.rules
 set(CPACK_PACKAGE_NAME "tpm-pin")
 set(CPACK_PACKAGE_VENDOR "Secure PIN Team")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "TPM 2.0 Windows Hello-style PIN authentication for Linux")
-set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/secure-pin/secure-pin-for-linux")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/steacep/secure-pin-for-linux")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
 set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
