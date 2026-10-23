@@ -563,7 +563,6 @@ TSS2_RC tpm_engine_reset_da_lockout(ESYS_CONTEXT *ctx) {
 
 TSS2_RC tpm_engine_get_status(ESYS_CONTEXT *ctx, tpm_pin_status_t *status) {
     if (!ctx || !status) return TSS2_ESYS_RC_LAYER;
-    status->tpm_present = true;
 
     char mfg[32] = {0};
     char vendor_str[64] = {0};
@@ -581,7 +580,14 @@ TSS2_RC tpm_engine_get_status(ESYS_CONTEXT *ctx, tpm_pin_status_t *status) {
         &capData
     );
 
-    if (rc == TSS2_RC_SUCCESS && capData) {
+    if (rc != TSS2_RC_SUCCESS) {
+        status->tpm_present = false;
+        return rc;
+    }
+
+    status->tpm_present = true;
+
+    if (capData) {
         UINT32 count = capData->data.tpmProperties.count;
         for (UINT32 i = 0; i < count; i++) {
             UINT32 prop = capData->data.tpmProperties.tpmProperty[i].property;

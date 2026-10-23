@@ -104,8 +104,8 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
                     host_installed = False
 
             return {
-                "tpm_present": False if not host_installed else True,
-                "tpm_manufacturer": "Host service missing" if not host_installed else "TPM 2.0",
+                "tpm_present": False,
+                "tpm_manufacturer": "Host service missing" if not host_installed else "TPM 2.0 (Not detected)",
                 "host_installed": host_installed,
                 "is_enrolled": False,
                 "pcr7_bound": False,
