@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+    if [ -x /usr/sbin/pam-auth-update ]; then
+        /usr/sbin/pam-auth-update --package --remove tpm-pin >/dev/null 2>&1 || true
+    fi
+    if [ -x /usr/bin/tpm-pin-ctl ]; then
+        /usr/bin/tpm-pin-ctl pam disable >/dev/null 2>&1 || true
+    fi
+fi
+
+#DEBHELPER#
+exit 0

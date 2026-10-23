@@ -34,6 +34,14 @@ Includes a native GTK4/Libadwaita settings application.
 %install
 %cmake_install
 
+%preun
+if [ $1 -eq 0 ]; then
+    # Package is being uninstalled, not upgraded
+    if [ -x %{_bindir}/tpm-pin-ctl ]; then
+        %{_bindir}/tpm-pin-ctl pam disable >/dev/null 2>&1 || :
+    fi
+fi
+
 %files
 %license LICENSE
 %doc README.md
@@ -56,6 +64,7 @@ Includes a native GTK4/Libadwaita settings application.
 - Support host portal delegation via flatpak-spawn in GTK4 settings app
 - Integrate Flatpak package generation into build script and CI/CD workflow
 - Add AppStream metainfo XML metadata for software centers
+- Add %preun removal scriptlet and PAM open_err=ignore hardening to prevent uninstall lockouts
 - Add contribution guidelines and GitHub issue templates
 
 * Fri Oct 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.2-1

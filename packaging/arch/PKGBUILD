@@ -8,6 +8,7 @@ url="https://github.com/steacep/secure-pin-for-linux"
 license=('GPL3')
 depends=('pam' 'tpm2-tss' 'openssl' 'python' 'python-gobject' 'libadwaita')
 makedepends=('cmake' 'gcc' 'pkgconf')
+install=tpm-pin.install
 source=("$pkgname-$pkgver.tar.gz")
 sha256sums=('SKIP')
 

@@ -213,7 +213,7 @@ bool pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_l
     (void)cfg;
     linux_distro_t distro = pam_manager_detect_distro();
 
-    const char *rule = "auth [success=done authinfo_unavail=ignore default=ignore] pam_tpm_pin.so";
+    const char *rule = "auth [success=done authinfo_unavail=ignore open_err=ignore default=ignore] pam_tpm_pin.so";
 
     if (distro == DISTRO_DEBIAN_UBUNTU) {
         /* If pam-auth-update profile exists, try it */

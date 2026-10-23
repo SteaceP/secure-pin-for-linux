@@ -1,0 +1,5 @@
+pre_remove() {
+    if [ -x /usr/bin/tpm-pin-ctl ]; then
+        /usr/bin/tpm-pin-ctl pam disable >/dev/null 2>&1 || true
+    fi
+}

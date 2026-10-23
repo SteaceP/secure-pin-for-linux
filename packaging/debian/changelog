@@ -5,7 +5,9 @@ tpm-pin (1.0.3-1) unstable; urgency=medium
   * Support host delegation via flatpak-spawn in GTK4/Libadwaita settings app.
   * Integrate Flatpak package generation into build script and CI/CD workflow.
   * Add AppStream metainfo XML metadata for desktop software centers.
-  * Add comprehensive contribution guidelines and GitHub issue template.
+  * Harden PAM configuration with open_err=ignore to prevent lockouts if module is missing.
+  * Add pre-removal and post-removal package hooks to clean up PAM configurations on uninstall.
+  * Add uninstall hooks for Debian (prerm/postrm), Fedora/RPM (%preun), and Arch Linux (.install).
 
  -- Secure PIN Maintainers <steace@coderage.pro>  Fri, 23 Oct 2026 10:30:00 -0400
 

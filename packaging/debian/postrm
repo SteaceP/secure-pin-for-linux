@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "purge" ] || [ "$1" = "remove" ]; then
+    if [ -x /usr/sbin/pam-auth-update ]; then
+        /usr/sbin/pam-auth-update --package --remove tpm-pin >/dev/null 2>&1 || true
+    fi
+fi
+
+if [ "$1" = "purge" ]; then
+    rm -rf /var/lib/tpm-pin
+    rm -rf /etc/tpm-pin
+fi
+
+#DEBHELPER#
+exit 0
