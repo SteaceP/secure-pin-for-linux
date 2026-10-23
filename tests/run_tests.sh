@@ -5,14 +5,18 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
 echo "=== Building Secure PIN for Linux ==="
-mkdir -p build
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Debug
-cmake --build .
+if [ -f build/CMakeCache.txt ]; then
+    if ! grep -q "CMAKE_CACHEFILE_DIR:INTERNAL=$DIR/build" build/CMakeCache.txt 2>/dev/null; then
+        echo "Stale CMake cache detected, clearing build cache..."
+        rm -rf build/CMakeCache.txt build/CMakeFiles
+    fi
+fi
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
 
 echo ""
 echo "=== Checking Python GTK4 / Libadwaita Settings App ==="
-python3 -m py_compile ../gui/tpm-pin-settings
+python3 -m py_compile gui/tpm-pin-settings
 echo "Python syntax check: PASSED"
 
 echo ""
@@ -48,13 +52,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-./test_pam_harness
+./build/test_pam_harness
 
 echo ""
 echo "=== CLI Status Smoke Test ==="
-./tpm-pin-ctl status || true
+./build/tpm-pin-ctl status || true
 echo ""
-./tpm-pin-ctl status --json || true
+./build/tpm-pin-ctl status --json || true
 
 echo ""
 echo "=== All Tests Completed Successfully! ==="

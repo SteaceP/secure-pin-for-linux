@@ -1,7 +1,0 @@
-/usr/lib/security/pam_tpm_pin.so
-/usr/bin/tpm-pin-ctl
-/usr/libexec/tpm-pin-verify
-/usr/bin/tpm-pin-settings
-/usr/share/applications/io.github.securepin.Settings.desktop
-/usr/share/polkit-1/actions/io.github.securepin.policy
-/usr/share/pam-configs/tpm-pin

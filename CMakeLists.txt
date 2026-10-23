@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(tpm-pin VERSION 1.0.0 LANGUAGES C)
+project(tpm-pin VERSION 1.0.1 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -144,6 +144,8 @@ install(FILES packaging/pam-configs/tpm-pin
 set(CPACK_PACKAGE_NAME "tpm-pin")
 set(CPACK_PACKAGE_VENDOR "Secure PIN Team")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "TPM 2.0 Windows Hello-style PIN authentication for Linux")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/secure-pin/secure-pin-for-linux")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
 set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
 set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
@@ -151,7 +153,8 @@ set(CPACK_GENERATOR "TGZ;DEB;RPM")
 
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Secure PIN Team <steace@coderage.pro>")
 set(CPACK_DEBIAN_PACKAGE_SECTION "admin")
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libpam0g, python3, python3-gi, gir1.2-adw-1")
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libpam0g, python3, python3-gi, gir1.2-adw-1, gir1.2-gtk-4.0")
 set(CPACK_DEBIAN_FILE_NAME "DEB-DEFAULT")
 
 set(CPACK_RPM_PACKAGE_LICENSE "GPLv3+")

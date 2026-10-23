@@ -1,3 +1,17 @@
+tpm-pin (1.0.1-1) unstable; urgency=medium
+
+  * Fix PCR 7 policy bypass and enforce Esys_PolicyAuthValue.
+  * Correct TPM2_SE_TRIAL value to 0x03 and realign TSS2 struct ABI sizes.
+  * Add Microsoft Pluton, AMD PSP, and Intel PTT hardware fTPM detection.
+  * Enable AES-128-CFB encrypted TPM sessions for bus security.
+  * Thread safety: remove global TCTI and manage per-context via Esys_GetTcti.
+  * Harden file I/O against symlink/FIFO attacks with O_NOFOLLOW and fsync.
+  * Prevent privilege escalation on --user and resolve PKEXEC_UID/SUDO_UID.
+  * Gracefully handle empty PIN inputs in PAM module and CLI.
+  * Expand automated test harness and update multi-distro release packages.
+
+ -- Secure PIN Maintainers <steace@coderage.pro>  Fri, 23 Oct 2026 01:30:00 -0400
+
 tpm-pin (1.0.0-1) unstable; urgency=medium
 
   * Initial release of Secure PIN for Linux.

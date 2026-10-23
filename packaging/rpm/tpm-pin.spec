@@ -1,5 +1,5 @@
 Name:           tpm-pin
-Version:        1.0.0
+Version:        1.0.1
 Release:        1%{?dist}
 Summary:        Windows Hello-style TPM 2.0 PIN authentication for Linux
 
@@ -47,5 +47,11 @@ Includes a native GTK4/Libadwaita settings application.
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 
 %changelog
+* Fri Oct 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.1-1
+- Security hardening: PCR 7 policy enforcement, AES-128-CFB encrypted sessions
+- Add Microsoft Pluton, AMD PSP, and Intel PTT hardware fTPM detection
+- Fix privilege escalation, file I/O security, and empty PIN input handling
+- Multi-distro CI/CD release packaging updates
+
 * Wed Oct 21 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.0-1
 - Initial release for Fedora / RHEL
