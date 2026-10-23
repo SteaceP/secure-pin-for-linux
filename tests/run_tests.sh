@@ -24,10 +24,8 @@ echo "=== Running Automated Tests ==="
 SWTPM_PID=""
 SWTPM_DIR=""
 
-# Check if /dev/tpmrm0 is accessible; if not, spin up swtpm
-if [ -r /dev/tpmrm0 ] && [ -w /dev/tpmrm0 ]; then
-    echo "Using hardware TPM: /dev/tpmrm0"
-elif which swtpm >/dev/null 2>&1; then
+# Prefer isolated swtpm if available to avoid burning hardware TPM DA tries during tests
+if which swtpm >/dev/null 2>&1; then
     SWTPM_DIR=$(mktemp -d /tmp/swtpm_test.XXXXXX)
     echo "Starting isolated swtpm in $SWTPM_DIR ..."
     swtpm_setup --tpm2 --tpm-state "$SWTPM_DIR" --createek 2>/dev/null || true
@@ -40,6 +38,8 @@ elif which swtpm >/dev/null 2>&1; then
     sleep 0.8
     export TCTI="swtpm:host=127.0.0.1,port=2321"
     echo "swtpm running (PID $SWTPM_PID, TCTI=$TCTI)"
+elif [ -r /dev/tpmrm0 ] && [ -w /dev/tpmrm0 ]; then
+    echo "Using hardware TPM: /dev/tpmrm0"
 fi
 
 cleanup() {

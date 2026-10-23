@@ -86,6 +86,7 @@ target_link_libraries(pam_tpm_pin PRIVATE
     tpmpin_common
     ${PAM_LIB}
 )
+target_link_options(pam_tpm_pin PRIVATE "-Wl,--no-undefined")
 
 # CLI Administration Tool
 add_executable(tpm-pin-ctl src/cli/tpm_pin_ctl.c)
