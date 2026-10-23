@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    if [ -x /usr/sbin/pam-auth-update ]; then
+        /usr/sbin/pam-auth-update --package >/dev/null 2>&1 || true
+    fi
+fi
+
+#DEBHELPER#
+exit 0

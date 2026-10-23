@@ -3,9 +3,9 @@ Default: yes
 Priority: 260
 Auth-Type: Primary
 Auth:
-	[success=end open_err=ignore default=ignore]	pam_tpm_pin.so
+	[success=end authinfo_unavail=ignore open_err=ignore default=ignore]	pam_tpm_pin.so
 Auth-Initial:
-	[success=end open_err=ignore default=ignore]	pam_tpm_pin.so
+	[success=end authinfo_unavail=ignore open_err=ignore default=ignore]	pam_tpm_pin.so
 Account-Type: Additional
 Account:
 	optional	pam_tpm_pin.so

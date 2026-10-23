@@ -34,6 +34,14 @@ Includes a native GTK4/Libadwaita settings application.
 %install
 %cmake_install
 
+%post
+if [ $1 -eq 1 ]; then
+    # Initial installation
+    if [ -x %{_bindir}/tpm-pin-ctl ]; then
+        %{_bindir}/tpm-pin-ctl pam enable >/dev/null 2>&1 || :
+    fi
+fi
+
 %preun
 if [ $1 -eq 0 ]; then
     # Package is being uninstalled, not upgraded

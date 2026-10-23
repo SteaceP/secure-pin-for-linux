@@ -132,7 +132,13 @@ static bool insert_pam_rule(const char *filepath, const char *rule, const char *
 
     while (fgets(line, sizeof(line), in)) {
         if (!inserted && before_needle && strstr(line, before_needle) && !strstr(line, "pam_tpm_pin.so")) {
-            fprintf(out, "%s\n", rule);
+            const char *succ = strstr(line, "success=");
+            if (succ) {
+                int jump = atoi(succ + 8) + 1;
+                fprintf(out, "auth\t[success=%d authinfo_unavail=ignore open_err=ignore default=ignore]\tpam_tpm_pin.so\n", jump);
+            } else {
+                fprintf(out, "%s\n", rule);
+            }
             inserted = true;
         }
         if (strstr(line, "pam_tpm_pin.so") == NULL) {
@@ -213,12 +219,12 @@ bool pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_l
     (void)cfg;
     linux_distro_t distro = pam_manager_detect_distro();
 
-    const char *rule = "auth [success=done authinfo_unavail=ignore open_err=ignore default=ignore] pam_tpm_pin.so";
+    const char *rule = "auth [success=1 authinfo_unavail=ignore open_err=ignore default=ignore] pam_tpm_pin.so";
 
     if (distro == DISTRO_DEBIAN_UBUNTU) {
-        /* If pam-auth-update profile exists, try it */
+        /* If pam-auth-update profile exists, apply it non-interactively */
         if (access("/usr/share/pam-configs/tpm-pin", R_OK) == 0 && access("/usr/sbin/pam-auth-update", X_OK) == 0) {
-            int ret = system("/usr/sbin/pam-auth-update --package --enable tpm-pin >/dev/null 2>&1");
+            int ret = system("/usr/sbin/pam-auth-update --package --force >/dev/null 2>&1");
             if (ret == 0 && pam_manager_is_enabled()) return true;
         }
         /* Fallback: direct safe insertion in /etc/pam.d/common-auth before pam_unix.so */

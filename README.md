@@ -123,13 +123,26 @@ Use the build script to compile the project and generate distribution packages i
 ./build.sh --clean
 ```
 
-Alternatively, you can build manually with CMake:
+Alternatively, you can build and install manually with CMake:
 
 ```bash
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
+sudo make install
 ```
+
+> [!NOTE]
+> **PAM Activation on New Installs**:
+>
+> - **Distribution packages (`.deb`, `.rpm`, Arch `PKGBUILD`)**: Package maintainer scripts automatically register and activate the PAM configuration with safe relative jumps on installation.
+> - **Installed from source (`make install`)**: PAM integration is not enabled automatically. You must activate it after installation using either:
+>
+>   ```bash
+>   sudo tpm-pin-ctl pam enable
+>   ```
+>
+>   or by toggling **"Enable TPM PIN in PAM"** in the GTK Settings application (`tpm-pin-settings`).
 
 ### 3. Run Automated Tests
 
@@ -177,10 +190,13 @@ You will be prompted for your current login password (to seal for desktop keyrin
 
 ### 5. Enable System-Wide PAM Integration
 
-To safely activate TPM PIN authentication across login, lockscreen, and `sudo`:
+*(Note: Automatically activated when installed via `.deb`, `.rpm`, or Arch package).*
+
+When installed from source, safely activate TPM PIN authentication across login, lockscreen, and `sudo` using:
 
 ```bash
-sudo ./build/tpm-pin-ctl pam enable
+sudo tpm-pin-ctl pam enable
+# or from build tree: sudo ./build/tpm-pin-ctl pam enable
 ```
 
 To disable and revert PAM configuration:

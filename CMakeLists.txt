@@ -165,6 +165,9 @@ if(NOT BUILD_GUI_ONLY)
     set(CPACK_DEBIAN_PACKAGE_SECTION "admin")
     set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
     set(CPACK_DEBIAN_PACKAGE_DEPENDS "libpam0g, python3, python3-gi, gir1.2-adw-1, gir1.2-gtk-4.0")
+    set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+        "${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postinst;${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/prerm;${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postrm"
+    )
     set(CPACK_DEBIAN_FILE_NAME "DEB-DEFAULT")
 
     set(CPACK_RPM_PACKAGE_LICENSE "GPLv3+")

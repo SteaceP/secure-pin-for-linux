@@ -30,6 +30,16 @@ static bool is_service_enabled(const char *service, const tpm_pin_config_t *cfg)
     return false;
 }
 
+static void pam_cleanup_secret(pam_handle_t *pamh, void *data, int error_status) {
+    (void)pamh;
+    (void)error_status;
+    if (data) {
+        char *str = (char *)data;
+        tpm_pin_zero(str, strlen(str));
+        free(str);
+    }
+}
+
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     (void)argc;
     (void)argv;
@@ -105,6 +115,12 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
         if (strlen(unsealed_pwd) > 0) {
             /* Pass unsealed system password to PAM_AUTHTOK so GNOME Keyring unlocks automatically */
             pam_set_item(pamh, PAM_AUTHTOK, unsealed_pwd);
+
+            /* Stash unsealed password in PAM data so pam_gnome_keyring session can auto-unlock */
+            char *gkr_pwd = strdup(unsealed_pwd);
+            if (gkr_pwd) {
+                pam_set_data(pamh, "gkr_system_authtok", gkr_pwd, pam_cleanup_secret);
+            }
         } else {
             pam_set_item(pamh, PAM_AUTHTOK, input);
         }
