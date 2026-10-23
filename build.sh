@@ -150,7 +150,7 @@ if [ "$DO_PACKAGE" = true ]; then
         if command -v docker >/dev/null 2>&1; then
             echo "Building Arch Linux package via Docker..."
             VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-            [ -z "$VERSION" ] && VERSION="1.0.3"
+            [ -z "$VERSION" ] && VERSION="1.0.4"
             docker run --rm \
                 -v "$ROOT_DIR:/src:ro" \
                 -v "$DIST_DIR:/out" \
@@ -178,7 +178,7 @@ if [ "$DO_PACKAGE" = true ]; then
         if command -v flatpak-builder >/dev/null 2>&1; then
             echo "Building Flatpak package via flatpak-builder..."
             VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-            [ -z "$VERSION" ] && VERSION="1.0.3"
+            [ -z "$VERSION" ] && VERSION="1.0.4"
             mkdir -p "$ROOT_DIR/build-flatpak" "$ROOT_DIR/flatpak-repo"
             flatpak-builder --force-clean --repo="$ROOT_DIR/flatpak-repo" "$ROOT_DIR/build-flatpak" packaging/flatpak/io.github.securepin.Settings.yml
             flatpak build-bundle "$ROOT_DIR/flatpak-repo" "$DIST_DIR/io.github.securepin.Settings-${VERSION}.flatpak" io.github.securepin.Settings

@@ -200,7 +200,7 @@ Commit messages follow the [Conventional Commits](https://www.conventionalcommit
 
 - `feat(pam): add candidate policy heuristic for alphanumeric PINs`
 - `fix(tpm): clear auth session context on unseal failure`
-- `chore: bump version to 1.0.3`
+- `chore: bump version to 1.0.4`
 
 ---
 

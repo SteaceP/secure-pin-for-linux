@@ -1,3 +1,13 @@
+tpm-pin (1.0.4-1) unstable; urgency=medium
+
+  * Fix Arch Linux packaging by bundling tpm-pin.install in Docker build context.
+  * Ensure PAM module compatibility on RPM distros by symlinking /usr/lib64/security.
+  * Sync RPM spec install and filelist targets with CMake install definitions.
+  * Harden TPM 2.0 presence detection and disable PIN setup when device is missing.
+  * Fix GNOME Keyring auto-unlock stashing and relative jump handling in PAM manager.
+
+ -- Secure PIN Maintainers <steace@coderage.pro>  Fri, 23 Oct 2026 13:20:00 -0400
+
 tpm-pin (1.0.3-1) unstable; urgency=medium
 
   * Add Flatpak packaging manifest with GNOME 50 runtime support.

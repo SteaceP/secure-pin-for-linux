@@ -34,6 +34,11 @@
   </provides>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="1.0.4" date="2026-10-23">
+      <description>
+        <p>Release 1.0.4: Multi-distro packaging fixes for Arch Linux and RPM, hardened TPM presence detection, and GNOME Keyring auto-unlock improvements.</p>
+      </description>
+    </release>
     <release version="1.0.3" date="2026-10-23">
       <description>
         <p>Release 1.0.3: Flatpak packaging support with GNOME 50 runtime, sandbox host portal integration, and project documentation updates.</p>

@@ -1,5 +1,5 @@
 Name:           tpm-pin
-Version:        1.0.3
+Version:        1.0.4
 Release:        1%{?dist}
 Summary:        Windows Hello-style TPM 2.0 PIN authentication for Linux
 
@@ -69,6 +69,13 @@ fi
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 
 %changelog
+* Fri Oct 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.4-1
+- Fix Arch Linux packaging by bundling tpm-pin.install in Docker build context
+- Ensure PAM module compatibility on RPM distros by symlinking /usr/lib64/security
+- Sync RPM spec install and filelist targets with CMake install definitions
+- Harden TPM 2.0 presence detection and disable PIN setup when device is missing
+- Fix GNOME Keyring auto-unlock stashing and relative jump handling in PAM manager
+
 * Fri Oct 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.3-1
 - Add Flatpak packaging manifest with GNOME 50 runtime support
 - Add standalone Flatpak build helper script with bundle export and install options

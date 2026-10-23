@@ -111,7 +111,7 @@ echo "Building Flatpak application from manifest: $MANIFEST"
 flatpak-builder "${BUILDER_ARGS[@]}" "$BUILD_DIR" "$MANIFEST"
 
 VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' "$ROOT_DIR/CMakeLists.txt")
-[ -z "$VERSION" ] && VERSION="1.0.3"
+[ -z "$VERSION" ] && VERSION="1.0.4"
 
 if [ "$DO_BUNDLE" = true ]; then
     BUNDLE_NAME="${APP_ID}-${VERSION}.flatpak"
