@@ -133,6 +133,14 @@ install(FILES gui/io.github.securepin.Settings.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 )
 
+install(FILES gui/icons/hicolor/scalable/apps/io.github.securepin.Settings.svg
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+)
+
+install(FILES gui/icons/hicolor/symbolic/apps/io.github.securepin.Settings-symbolic.svg
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/symbolic/apps
+)
+
 install(FILES gui/io.github.securepin.policy
     DESTINATION ${CMAKE_INSTALL_DATADIR}/polkit-1/actions
 )

@@ -101,7 +101,22 @@ secure-pin-for-linux/
 
   *(Note: Installing `.deb`, `.rpm`, or Arch packages automatically configures a `uaccess` udev rule for desktop sessions).*
 
-### 2. Build
+### 2. Build & Package Locally
+
+Use the build script to compile the project and generate distribution packages into `dist/`:
+
+```bash
+# Build binaries and all release packages (.deb, .rpm, .tar.gz) into ./dist
+./build.sh
+
+# Or compile binaries only without packaging:
+./build.sh --no-package
+
+# Or clean build outputs and rebuild:
+./build.sh --clean
+```
+
+Alternatively, you can build manually with CMake:
 
 ```bash
 mkdir -p build && cd build
@@ -171,7 +186,13 @@ sudo ./build/tpm-pin-ctl pam disable
 
 ## Distribution Packaging
 
-- **Build `.deb` package**:
+The easiest way to generate all packages locally is via the build script, which outputs to `dist/` and computes SHA-256 checksums:
+
+```bash
+./build.sh
+```
+
+To build individual packages manually:
 
   ```bash
   cd build && cpack -G DEB

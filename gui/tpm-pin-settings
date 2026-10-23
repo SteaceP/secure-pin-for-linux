@@ -32,6 +32,7 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.set_title("Secure PIN Settings")
+        self.set_icon_name("io.github.securepin.Settings")
         self.set_default_size(720, 680)
 
         self._updating_ui = False

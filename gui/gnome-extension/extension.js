@@ -1,14 +1,15 @@
-import GLib from 'gi://GLib';
+import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
-import { QuickMenuToggle, SystemIndicator } from 'resource:///org/gnome/shell/ui/quickSettings.js';
+import { QuickToggle, SystemIndicator } from 'resource:///org/gnome/shell/ui/quickSettings.js';
 
-class SecurePinToggle extends QuickMenuToggle {
-    constructor() {
-        super({
+const SecurePinToggle = GObject.registerClass(
+class SecurePinToggle extends QuickToggle {
+    _init() {
+        super._init({
             title: 'Secure PIN',
-            iconName: 'dialog-password-symbolic',
+            iconName: 'io.github.securepin.Settings-symbolic',
             toggleMode: false,
         });
 
@@ -16,11 +17,11 @@ class SecurePinToggle extends QuickMenuToggle {
             try {
                 Gio.AppInfo.create_from_commandline('tpm-pin-settings', 'Secure PIN', 0).launch([], null);
             } catch (e) {
-                logError(e, 'Failed to launch tpm-pin-settings');
+                console.error('Failed to launch tpm-pin-settings:', e);
             }
         });
     }
-}
+});
 
 export default class SecurePinExtension extends Extension {
     enable() {
