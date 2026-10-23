@@ -224,6 +224,12 @@ To build individual packages manually:
 
 ---
 
+## Contributing
+
+Contributions, bug reports, and pull requests are welcome. Please refer to [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing workflows, and coding standards.
+
+---
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE) for details.
