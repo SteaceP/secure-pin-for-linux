@@ -39,6 +39,9 @@ typedef uint8_t   TPM2_SE;
 #define TPM2_NUM_PCR_BANKS              16
 #define TPM2_PCR_SELECT_MIN             3
 #define TPM2_PCR_SELECT_MAX             4
+#define TPM2_MAX_RSA_KEY_BYTES          512
+#define TPM2_MAX_ECC_KEY_BYTES          128
+#define TPM2_MAX_PRIVATE_BUFFER         1550
 
 /* TPM2 Constants */
 #define TPM2_RH_OWNER                   0x40000001
@@ -77,7 +80,7 @@ typedef uint8_t   TPM2_SE;
 /* Session types */
 #define TPM2_SE_HMAC                    0x00
 #define TPM2_SE_POLICY                  0x01
-#define TPM2_SE_TRIAL                   0x02
+#define TPM2_SE_TRIAL                   0x03
 
 /* Session attributes */
 #define TPMA_SESSION_CONTINUESESSION    ((TPMA_SESSION)1 << 0)
@@ -87,8 +90,12 @@ typedef uint8_t   TPM2_SE;
 #define TPMA_SESSION_ENCRYPT            ((TPMA_SESSION)1 << 6)
 #define TPMA_SESSION_AUDIT              ((TPMA_SESSION)1 << 7)
 
-/* Capabilities */
+/* Capabilities and Properties */
 #define TPM2_CAP_TPM_PROPERTIES         ((UINT32)0x00000006)
+#define TPM2_PT_GROUP                   ((UINT32)0x00000100)
+#define TPM2_PT_FIXED                   ((UINT32)(TPM2_PT_GROUP * 1))
+#define TPM2_PT_VAR                     ((UINT32)(TPM2_PT_GROUP * 2))
+
 #define TPM2_PT_MANUFACTURER            ((UINT32)0x00000105)
 #define TPM2_PT_VENDOR_STRING_1         ((UINT32)0x00000106)
 #define TPM2_PT_VENDOR_STRING_2         ((UINT32)0x00000107)
@@ -96,6 +103,12 @@ typedef uint8_t   TPM2_SE;
 #define TPM2_PT_VENDOR_STRING_4         ((UINT32)0x00000109)
 #define TPM2_PT_FIRMWARE_VERSION_1      ((UINT32)0x0000010B)
 #define TPM2_PT_FIRMWARE_VERSION_2      ((UINT32)0x0000010C)
+
+#define TPM2_PT_PERMANENT               ((UINT32)(TPM2_PT_VAR + 0))
+#define TPM2_PT_LOCKOUT_COUNTER         ((UINT32)(TPM2_PT_VAR + 14))
+#define TPM2_PT_MAX_AUTH_FAIL           ((UINT32)(TPM2_PT_VAR + 15))
+#define TPM2_PT_LOCKOUT_INTERVAL        ((UINT32)(TPM2_PT_VAR + 16))
+#define TPM2_PT_LOCKOUT_RECOVERY        ((UINT32)(TPM2_PT_VAR + 17))
 
 typedef struct {
     UINT32 property;
@@ -142,7 +155,7 @@ typedef struct {
 
 typedef struct {
     UINT16 size;
-    BYTE   buffer[2048];
+    BYTE   buffer[TPM2_MAX_PRIVATE_BUFFER];
 } TPM2B_PRIVATE;
 
 typedef struct {
@@ -215,12 +228,17 @@ typedef union {
 
 typedef struct {
     UINT16 size;
-    BYTE   buffer[256];
+    BYTE   buffer[TPM2_MAX_RSA_KEY_BYTES];
 } TPM2B_PUBLIC_KEY_RSA;
 
 typedef struct {
-    TPM2B_DIGEST x;
-    TPM2B_DIGEST y;
+    UINT16 size;
+    BYTE   buffer[TPM2_MAX_ECC_KEY_BYTES];
+} TPM2B_ECC_PARAMETER;
+
+typedef struct {
+    TPM2B_ECC_PARAMETER x;
+    TPM2B_ECC_PARAMETER y;
 } TPMS_ECC_POINT;
 
 typedef union {

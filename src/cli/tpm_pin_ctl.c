@@ -86,17 +86,45 @@ int main(int argc, char **argv) {
         }
     }
 
-    uid_t uid = getuid();
+    uid_t caller_uid = getuid();
+    uid_t uid = caller_uid;
+    char user_buf[128] = {0};
+
     if (username) {
-        struct passwd *pw = getpwnam(username);
-        if (!pw) {
+        struct passwd pwd_s;
+        struct passwd *pw = NULL;
+        char pbuf[1024];
+        if (getpwnam_r(username, &pwd_s, pbuf, sizeof(pbuf), &pw) != 0 || !pw) {
             fprintf(stderr, "Error: Unknown user '%s'\n", username);
             return 1;
         }
+        if (caller_uid != 0 && pw->pw_uid != caller_uid) {
+            fprintf(stderr, "Error: Permission denied (only root can target another user).\n");
+            return 1;
+        }
         uid = pw->pw_uid;
+        snprintf(user_buf, sizeof(user_buf), "%s", pw->pw_name);
+        username = user_buf;
     } else {
-        struct passwd *pw = getpwuid(uid);
-        if (pw) username = pw->pw_name;
+        if (caller_uid == 0) {
+            const char *pkexec_uid = getenv("PKEXEC_UID");
+            const char *sudo_uid = getenv("SUDO_UID");
+            const char *orig_uid_str = pkexec_uid ? pkexec_uid : sudo_uid;
+            if (orig_uid_str && orig_uid_str[0] != '\0') {
+                char *endptr = NULL;
+                unsigned long parsed = strtoul(orig_uid_str, &endptr, 10);
+                if (endptr && *endptr == '\0' && parsed > 0) {
+                    uid = (uid_t)parsed;
+                }
+            }
+        }
+        struct passwd pwd_s;
+        struct passwd *pw = NULL;
+        char pbuf[1024];
+        if (getpwuid_r(uid, &pwd_s, pbuf, sizeof(pbuf), &pw) == 0 && pw) {
+            snprintf(user_buf, sizeof(user_buf), "%s", pw->pw_name);
+            username = user_buf;
+        }
     }
 
     tpm_pin_config_t cfg;
@@ -118,6 +146,10 @@ int main(int argc, char **argv) {
             printf("  \"uid\": %u,\n", (unsigned int)uid);
             printf("  \"is_enrolled\": %s,\n", status.is_enrolled ? "true" : "false");
             printf("  \"pcr7_bound\": %s,\n", status.pcr7_bound ? "true" : "false");
+            printf("  \"bind_pcr7\": %s,\n", cfg.bind_pcr7 ? "true" : "false");
+            printf("  \"is_locked_out\": %s,\n", status.is_locked_out ? "true" : "false");
+            printf("  \"failed_tries\": %u,\n", status.failed_tries);
+            printf("  \"max_tries\": %u,\n", status.max_tries);
             printf("  \"keyring_pwd_saved\": %s,\n", status.keyring_pwd_saved ? "true" : "false");
             printf("  \"pam_enabled\": %s,\n", pam_active ? "true" : "false");
             printf("  \"distro\": \"%s\",\n", pam_manager_distro_name(distro));
@@ -148,6 +180,11 @@ int main(int argc, char **argv) {
                    cfg.min_length, cfg.max_length);
             printf("TPM DA Lockout Max:     %u failed attempts (cooldown: %u sec)\n",
                    cfg.da_max_tries, cfg.da_recovery_time);
+            if (status.tpm_present) {
+                printf("TPM Hardware DA State:  %s (%u / %u failed tries)\n",
+                       status.is_locked_out ? "LOCKED OUT" : "Ready",
+                       status.failed_tries, status.max_tries);
+            }
         }
         return 0;
     }
@@ -169,19 +206,24 @@ int main(int argc, char **argv) {
             char *confirm = read_secret("Confirm new PIN: ");
             if (!confirm || !pin || strcmp(pin, confirm) != 0) {
                 fprintf(stderr, "Error: PINs do not match.\n");
-                if (pin) free(pin);
-                if (confirm) free(confirm);
-                if (pwd) free(pwd);
+                if (pin) { tpm_pin_zero(pin, strlen(pin)); free(pin); }
+                if (confirm) { tpm_pin_zero(confirm, strlen(confirm)); free(confirm); }
+                if (pwd) { tpm_pin_zero(pwd, strlen(pwd)); free(pwd); }
                 return 1;
             }
+            tpm_pin_zero(confirm, strlen(confirm));
             free(confirm);
         }
 
         char err[256];
         if (!tpm_pin_validate_pin(pin, &cfg, err, sizeof(err))) {
             fprintf(stderr, "Policy Error: %s\n", err);
+            tpm_pin_zero(pin, strlen(pin));
             free(pin);
-            if (pwd) free(pwd);
+            if (pwd) {
+                tpm_pin_zero(pwd, strlen(pwd));
+                free(pwd);
+            }
             return 1;
         }
 
@@ -285,6 +327,40 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (strcmp(action, "da-config") == 0) {
+        uint32_t max_tries = cfg.da_max_tries;
+        uint32_t recovery_sec = cfg.da_recovery_time;
+        uint32_t lockout_recovery = cfg.da_lockout_recovery;
+
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--max-tries") == 0 && i + 1 < argc) {
+                max_tries = (uint32_t)strtoul(argv[++i], NULL, 10);
+            } else if (strcmp(argv[i], "--recovery-sec") == 0 && i + 1 < argc) {
+                recovery_sec = (uint32_t)strtoul(argv[++i], NULL, 10);
+            } else if (strcmp(argv[i], "--lockout-recovery") == 0 && i + 1 < argc) {
+                lockout_recovery = (uint32_t)strtoul(argv[++i], NULL, 10);
+            }
+        }
+
+        ESYS_CONTEXT *ctx = NULL;
+        TSS2_RC rc = tpm_engine_init(cfg.tcti_name, &ctx);
+        if (rc == TSS2_RC_SUCCESS && ctx) {
+            rc = tpm_engine_configure_da(ctx, max_tries, recovery_sec, lockout_recovery);
+            tpm_engine_destroy(&ctx);
+            if (rc == TSS2_RC_SUCCESS) {
+                cfg.da_max_tries = max_tries;
+                cfg.da_recovery_time = recovery_sec;
+                cfg.da_lockout_recovery = lockout_recovery;
+                tpm_pin_config_save(NULL, &cfg);
+                printf("Success: TPM Dictionary Attack parameters configured (max_tries=%u, recovery=%u, lockout_recovery=%u).\n",
+                       max_tries, recovery_sec, lockout_recovery);
+                return 0;
+            }
+        }
+        fprintf(stderr, "Failed to configure TPM DA protection (RC: 0x%x). Requires root / lockout authorization.\n", rc);
+        return 1;
+    }
+
     if (strcmp(action, "config") == 0) {
         if (argc < 4) {
             printf("Usage: %s config get <key> | config set <key> <value>\n", argv[0]);
@@ -302,19 +378,55 @@ int main(int argc, char **argv) {
             else if (strcasecmp(key, "enable_sudo") == 0) printf("%s\n", cfg.enable_sudo ? "true" : "false");
             else if (strcasecmp(key, "enable_keyring_unlock") == 0) printf("%s\n", cfg.enable_keyring_unlock ? "true" : "false");
             else if (strcasecmp(key, "bind_pcr7") == 0) printf("%s\n", cfg.bind_pcr7 ? "true" : "false");
+            else if (strcasecmp(key, "da_max_tries") == 0) printf("%u\n", cfg.da_max_tries);
+            else if (strcasecmp(key, "da_recovery_time") == 0) printf("%u\n", cfg.da_recovery_time);
+            else if (strcasecmp(key, "da_lockout_recovery") == 0) printf("%u\n", cfg.da_lockout_recovery);
+            else {
+                fprintf(stderr, "Error: Unknown config key '%s'\n", key);
+                return 1;
+            }
             return 0;
         } else if (strcmp(sub, "set") == 0 && argc >= 5) {
             const char *val = argv[4];
             bool bval = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0 || strcasecmp(val, "yes") == 0);
 
             if (strcasecmp(key, "digits_only") == 0) cfg.digits_only = bval;
-            else if (strcasecmp(key, "min_length") == 0) cfg.min_length = (uint32_t)atoi(val);
-            else if (strcasecmp(key, "max_length") == 0) cfg.max_length = (uint32_t)atoi(val);
-            else if (strcasecmp(key, "enable_login") == 0) cfg.enable_login = bval;
+            else if (strcasecmp(key, "min_length") == 0) {
+                long val_num = strtol(val, NULL, 10);
+                if (val_num < 4 || val_num > TPM_PIN_MAX_PIN_LEN) {
+                    fprintf(stderr, "Error: min_length must be between 4 and %d\n", TPM_PIN_MAX_PIN_LEN);
+                    return 1;
+                }
+                cfg.min_length = (uint32_t)val_num;
+                if (cfg.max_length < cfg.min_length) cfg.max_length = cfg.min_length;
+            } else if (strcasecmp(key, "max_length") == 0) {
+                long val_num = strtol(val, NULL, 10);
+                if (val_num < 4 || val_num > TPM_PIN_MAX_PIN_LEN) {
+                    fprintf(stderr, "Error: max_length must be between 4 and %d\n", TPM_PIN_MAX_PIN_LEN);
+                    return 1;
+                }
+                cfg.max_length = (uint32_t)val_num;
+                if (cfg.min_length > cfg.max_length) cfg.min_length = cfg.max_length;
+            } else if (strcasecmp(key, "enable_login") == 0) cfg.enable_login = bval;
             else if (strcasecmp(key, "enable_lockscreen") == 0) cfg.enable_lockscreen = bval;
             else if (strcasecmp(key, "enable_sudo") == 0) cfg.enable_sudo = bval;
             else if (strcasecmp(key, "enable_keyring_unlock") == 0) cfg.enable_keyring_unlock = bval;
             else if (strcasecmp(key, "bind_pcr7") == 0) cfg.bind_pcr7 = bval;
+            else if (strcasecmp(key, "da_max_tries") == 0) {
+                long val_num = strtol(val, NULL, 10);
+                if (val_num < 1 || val_num > 1000) {
+                    fprintf(stderr, "Error: da_max_tries must be at least 1\n");
+                    return 1;
+                }
+                cfg.da_max_tries = (uint32_t)val_num;
+            } else if (strcasecmp(key, "da_recovery_time") == 0) {
+                cfg.da_recovery_time = (uint32_t)strtoul(val, NULL, 10);
+            } else if (strcasecmp(key, "da_lockout_recovery") == 0) {
+                cfg.da_lockout_recovery = (uint32_t)strtoul(val, NULL, 10);
+            } else {
+                fprintf(stderr, "Error: Unknown config key '%s'\n", key);
+                return 1;
+            }
 
             if (tpm_pin_config_save(NULL, &cfg)) {
                 printf("Updated config: %s = %s\n", key, val);

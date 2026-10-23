@@ -43,7 +43,7 @@ bool tpm_pin_derive_auth(const char *pin, const uint8_t *salt, size_t salt_len, 
     int ret = PKCS5_PBKDF2_HMAC(
         pin, (int)strlen(pin),
         salt, (int)salt_len,
-        25000,
+        100000,
         EVP_sha256(),
         (int)auth_len,
         out_auth

@@ -9,8 +9,18 @@
 int main(int argc, char **argv) {
     uid_t uid = getuid();
     if (argc >= 2) {
-        struct passwd *pw = getpwnam(argv[1]);
-        if (pw) uid = pw->pw_uid;
+        struct passwd pwd_s;
+        struct passwd *pw = NULL;
+        char pbuf[1024];
+        if (getpwnam_r(argv[1], &pwd_s, pbuf, sizeof(pbuf), &pw) != 0 || !pw) {
+            return 1;
+        }
+        /* Only root can verify PIN on behalf of a different user */
+        if (uid != 0 && uid != pw->pw_uid) {
+            fprintf(stderr, "Permission denied.\n");
+            return 1;
+        }
+        uid = pw->pw_uid;
     }
 
     tpm_pin_config_t cfg;
@@ -27,20 +37,9 @@ int main(int argc, char **argv) {
     }
 
     int tpm_rc = 0;
-    char unsealed[TPM_PIN_MAX_PASSWORD_LEN] = {0};
-    bool ok = tpm_pin_verify_user(uid, pin_buf, &cfg, unsealed, sizeof(unsealed), &tpm_rc);
+    bool ok = tpm_pin_verify_user(uid, pin_buf, &cfg, NULL, 0, &tpm_rc);
 
     tpm_pin_zero(pin_buf, sizeof(pin_buf));
 
-    if (ok) {
-        /* Print unsealed keyring password if available, then zero */
-        if (strlen(unsealed) > 0) {
-            printf("%s\n", unsealed);
-        }
-        tpm_pin_zero(unsealed, sizeof(unsealed));
-        return 0;
-    }
-
-    tpm_pin_zero(unsealed, sizeof(unsealed));
-    return 1;
+    return ok ? 0 : 1;
 }

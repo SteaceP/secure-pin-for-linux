@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
 #include "tpm_pin.h"
@@ -106,11 +107,28 @@ static bool insert_pam_rule(const char *filepath, const char *rule, const char *
 
     char tmp_file[512];
     snprintf(tmp_file, sizeof(tmp_file), "%s.tpm_tmp.%d", filepath, (int)getpid());
-    FILE *out = fopen(tmp_file, "w");
-    if (!out) { fclose(in); return false; }
+    int fd = open(tmp_file, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        fclose(in);
+        return false;
+    }
+    FILE *out = fdopen(fd, "w");
+    if (!out) {
+        close(fd);
+        unlink(tmp_file);
+        fclose(in);
+        return false;
+    }
 
     char line[1024];
     bool inserted = false;
+    bool needle_exists = before_needle ? file_contains(filepath, before_needle) : false;
+
+    if (!needle_exists) {
+        /* Prepend at the beginning of the auth stack if before_needle isn't found */
+        fprintf(out, "%s\n", rule);
+        inserted = true;
+    }
 
     while (fgets(line, sizeof(line), in)) {
         if (!inserted && before_needle && strstr(line, before_needle) && !strstr(line, "pam_tpm_pin.so")) {
@@ -122,13 +140,16 @@ static bool insert_pam_rule(const char *filepath, const char *rule, const char *
         }
     }
 
-    if (!inserted) {
-        /* Append at top if before_needle wasn't found */
-        fprintf(out, "%s\n", rule);
-    }
-
     fclose(in);
-    fclose(out);
+    if (ferror(out) || fflush(out) != 0 || fsync(fd) != 0) {
+        fclose(out);
+        unlink(tmp_file);
+        return false;
+    }
+    if (fclose(out) != 0) {
+        unlink(tmp_file);
+        return false;
+    }
 
     chmod(tmp_file, 0644);
     if (rename(tmp_file, filepath) != 0) {
@@ -149,8 +170,18 @@ static bool remove_pam_rule(const char *filepath) {
 
     char tmp_file[512];
     snprintf(tmp_file, sizeof(tmp_file), "%s.tpm_tmp.%d", filepath, (int)getpid());
-    FILE *out = fopen(tmp_file, "w");
-    if (!out) { fclose(in); return false; }
+    int fd = open(tmp_file, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        fclose(in);
+        return false;
+    }
+    FILE *out = fdopen(fd, "w");
+    if (!out) {
+        close(fd);
+        unlink(tmp_file);
+        fclose(in);
+        return false;
+    }
 
     char line[1024];
     while (fgets(line, sizeof(line), in)) {
@@ -160,7 +191,15 @@ static bool remove_pam_rule(const char *filepath) {
     }
 
     fclose(in);
-    fclose(out);
+    if (ferror(out) || fflush(out) != 0 || fsync(fd) != 0) {
+        fclose(out);
+        unlink(tmp_file);
+        return false;
+    }
+    if (fclose(out) != 0) {
+        unlink(tmp_file);
+        return false;
+    }
 
     chmod(tmp_file, 0644);
     if (rename(tmp_file, filepath) != 0) {
@@ -195,6 +234,10 @@ bool pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_l
             ok = ok && insert_pam_rule("/etc/pam.d/password-auth", rule, "pam_unix.so");
         }
         return ok;
+    } else if (distro == DISTRO_OPENSUSE) {
+        if (access("/etc/pam.d/common-auth", W_OK) == 0) {
+            return insert_pam_rule("/etc/pam.d/common-auth", rule, "pam_unix.so");
+        }
     } else {
         /* Arch or Generic */
         if (access("/etc/pam.d/system-auth", W_OK) == 0) {

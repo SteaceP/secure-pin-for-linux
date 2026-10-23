@@ -26,7 +26,7 @@ if [ -r /dev/tpmrm0 ] && [ -w /dev/tpmrm0 ]; then
 elif which swtpm >/dev/null 2>&1; then
     SWTPM_DIR=$(mktemp -d /tmp/swtpm_test.XXXXXX)
     echo "Starting isolated swtpm in $SWTPM_DIR ..."
-    swtpm_setup --tpm2 --tpm-state "$SWTPM_DIR" --create-ek-cert --create-platform-cert 2>/dev/null || true
+    swtpm_setup --tpm2 --tpm-state "$SWTPM_DIR" --createek 2>/dev/null || true
     swtpm socket --tpm2 \
         --tpmstate dir="$SWTPM_DIR" \
         --ctrl type=tcp,port=2322 \
@@ -34,7 +34,7 @@ elif which swtpm >/dev/null 2>&1; then
         --flags not-need-init,startup-clear &
     SWTPM_PID=$!
     sleep 0.8
-    export TCTI="mssim:host=127.0.0.1,port=2321"
+    export TCTI="swtpm:host=127.0.0.1,port=2321"
     echo "swtpm running (PID $SWTPM_PID, TCTI=$TCTI)"
 fi
 

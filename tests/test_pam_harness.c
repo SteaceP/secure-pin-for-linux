@@ -135,8 +135,11 @@ static bool test_tpm_enroll_and_verify(void) {
     /* Enroll */
     bool enrolled = tpm_pin_enroll_user(test_uid, test_pin, test_password, &cfg);
     if (!enrolled) {
+        if (tcti_env || access("/dev/tpmrm0", R_OK | W_OK) == 0) {
+            return false;
+        }
         printf("[Notice: TPM not accessible or supported in this test environment] ");
-        return true; /* Skip gracefully if no TPM is running */
+        return true; /* Skip gracefully only if no TPM is running */
     }
 
     if (!tpm_pin_user_is_enrolled(test_uid, &cfg)) return false;
@@ -166,6 +169,98 @@ static bool test_tpm_enroll_and_verify(void) {
     return true;
 }
 
+static bool test_tpm_enroll_and_verify_pcr7(void) {
+    tpm_pin_config_t cfg;
+    tpm_pin_config_defaults(&cfg);
+    cfg.bind_pcr7 = true;
+
+    const char *tcti_env = getenv("TCTI");
+    if (tcti_env) {
+        snprintf(cfg.tcti_name, sizeof(cfg.tcti_name), "%s", tcti_env);
+    }
+    snprintf(cfg.data_dir, sizeof(cfg.data_dir), "/tmp/test_tpm_data_%d", (int)getpid());
+
+    uid_t test_uid = 9998;
+    const char *test_pin = "834192";
+    const char *test_password = "PCR7BoundPassword!";
+
+    tpm_pin_remove_user(test_uid, &cfg);
+
+    bool enrolled = tpm_pin_enroll_user(test_uid, test_pin, test_password, &cfg);
+    if (!enrolled) {
+        if (tcti_env || access("/dev/tpmrm0", R_OK | W_OK) == 0) {
+            return false;
+        }
+        return true; /* Skip gracefully only if no TPM is accessible */
+    }
+
+    if (!tpm_pin_user_is_enrolled(test_uid, &cfg)) return false;
+
+    /* Verify status reflects PCR 7 binding and saved keyring password */
+    tpm_pin_status_t st;
+    if (!tpm_pin_get_user_status(test_uid, &cfg, &st) || !st.is_enrolled || !st.pcr7_bound || !st.keyring_pwd_saved) {
+        tpm_pin_remove_user(test_uid, &cfg);
+        return false;
+    }
+
+    /* Verify with correct PIN */
+    char unsealed[TPM_PIN_MAX_PASSWORD_LEN] = {0};
+    int tpm_rc = 0;
+    if (!tpm_pin_verify_user(test_uid, test_pin, &cfg, unsealed, sizeof(unsealed), &tpm_rc)) {
+        tpm_pin_remove_user(test_uid, &cfg);
+        return false;
+    }
+
+    if (strcmp(unsealed, test_password) != 0) {
+        tpm_pin_remove_user(test_uid, &cfg);
+        return false;
+    }
+
+    /* Verify that wrong PIN FAILS even with PCR7 binding */
+    if (tpm_pin_verify_user(test_uid, "123456", &cfg, unsealed, sizeof(unsealed), &tpm_rc)) {
+        tpm_pin_remove_user(test_uid, &cfg);
+        return false;
+    }
+
+    /*
+     * Simulate an attacker tampering with the on-disk blob header to strip FLAG_PCR7_BOUND
+     * in an attempt to bypass PCR 7 policy using direct HMAC authorization.
+     * Because TPMA_OBJECT_USERWITHAUTH is cleared in the TPM-signed public area, the TPM
+     * must reject the unseal even when the attacker supplies the valid PIN.
+     */
+    char blob_path[512];
+    snprintf(blob_path, sizeof(blob_path), "%s/%u/sealed.blob", cfg.data_dir, (unsigned int)test_uid);
+    FILE *bf = fopen(blob_path, "r+b");
+    if (bf) {
+        tpm_sealed_header_t hdr;
+        if (fread(&hdr, sizeof(hdr), 1, bf) == 1) {
+            hdr.flags &= ~FLAG_PCR7_BOUND;
+            fseek(bf, 0, SEEK_SET);
+            fwrite(&hdr, sizeof(hdr), 1, bf);
+        }
+        fclose(bf);
+        if (tpm_pin_verify_user(test_uid, test_pin, &cfg, unsealed, sizeof(unsealed), &tpm_rc)) {
+            tpm_pin_remove_user(test_uid, &cfg);
+            return false;
+        }
+    }
+
+    /* Reset DA lockout counter after negative tests and verify failed_tries returns to 0 */
+    ESYS_CONTEXT *esys = NULL;
+    if (tpm_engine_init(cfg.tcti_name, &esys) == TSS2_RC_SUCCESS && esys) {
+        tpm_engine_reset_da_lockout(esys);
+        tpm_engine_destroy(&esys);
+    }
+
+    if (!tpm_pin_get_user_status(test_uid, &cfg, &st) || st.failed_tries != 0) {
+        tpm_pin_remove_user(test_uid, &cfg);
+        return false;
+    }
+
+    tpm_pin_remove_user(test_uid, &cfg);
+    return true;
+}
+
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -175,6 +270,7 @@ int main(int argc, char **argv) {
     RUN_TEST("AES-256-GCM + PBKDF2 Crypto Roundtrip", test_crypto_roundtrip);
     RUN_TEST("Configuration Serialization", test_config_serialization);
     RUN_TEST("TPM 2.0 User Enrollment & Unsealing", test_tpm_enroll_and_verify);
+    RUN_TEST("TPM 2.0 PCR 7 Binding & Authentication", test_tpm_enroll_and_verify_pcr7);
 
     printf("\nTest Summary: %d / %d tests passed.\n", pass_count, test_count);
     return (pass_count == test_count) ? 0 : 1;

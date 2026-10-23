@@ -51,7 +51,7 @@ TSS2_RC Esys_Initialize(
 void Esys_Finalize(
     ESYS_CONTEXT **esys_context);
 
-TSS2_RC Esys_GetTctiContext(
+TSS2_RC Esys_GetTcti(
     ESYS_CONTEXT *esys_context,
     TSS2_TCTI_CONTEXT **tcti);
 
@@ -152,6 +152,13 @@ TSS2_RC Esys_PolicyPCR(
     ESYS_TR shandle3,
     TPM2B_DIGEST const *pcrDigest,
     TPML_PCR_SELECTION const *pcrs);
+
+TSS2_RC Esys_PolicyAuthValue(
+    ESYS_CONTEXT *esysContext,
+    ESYS_TR policySession,
+    ESYS_TR shandle1,
+    ESYS_TR shandle2,
+    ESYS_TR shandle3);
 
 TSS2_RC Esys_PolicyGetDigest(
     ESYS_CONTEXT *esysContext,

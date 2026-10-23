@@ -12,18 +12,22 @@
 #include "tpm_pin.h"
 
 static bool is_service_enabled(const char *service, const tpm_pin_config_t *cfg) {
-    if (!service || !cfg) return true;
+    if (!service || !cfg) return false;
 
-    if (strcmp(service, "sudo") == 0 || strcmp(service, "su") == 0) {
+    if (strcmp(service, "sudo") == 0 || strcmp(service, "sudo-i") == 0 || strcmp(service, "su") == 0) {
         return cfg->enable_sudo;
-    }
-    if (strstr(service, "login") || strstr(service, "gdm") || strstr(service, "sddm") || strstr(service, "lightdm")) {
-        return cfg->enable_login;
     }
     if (strstr(service, "screenlocker") || strstr(service, "lock") || strstr(service, "polkit")) {
         return cfg->enable_lockscreen;
     }
-    return true;
+    if (strcmp(service, "gdm-password") == 0) {
+        return cfg->enable_login || cfg->enable_lockscreen;
+    }
+    if (strstr(service, "login") || strstr(service, "gdm") || strstr(service, "sddm") || strstr(service, "lightdm")) {
+        return cfg->enable_login;
+    }
+    /* Unknown or remote services (e.g. sshd, cockpit, cron) must NOT allow PIN by default */
+    return false;
 }
 
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
@@ -46,8 +50,10 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
         return PAM_USER_UNKNOWN;
     }
 
-    struct passwd *pwd = getpwnam(username);
-    if (!pwd) {
+    struct passwd pwd_buf;
+    struct passwd *pwd = NULL;
+    char pbuf[1024];
+    if (getpwnam_r(username, &pwd_buf, pbuf, sizeof(pbuf), &pwd) != 0 || !pwd) {
         return PAM_USER_UNKNOWN;
     }
 
@@ -72,7 +78,10 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
     }
 
     if (!input || strlen(input) == 0) {
-        if (input) free(input);
+        if (input) {
+            tpm_pin_zero(input, strlen(input));
+            free(input);
+        }
         return PAM_AUTHINFO_UNAVAIL;
     }
 
@@ -112,7 +121,7 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
      */
     pam_set_item(pamh, PAM_AUTHTOK, input);
 
-    if (tpm_rc == TPM2_RC_LOCKOUT && !(flags & PAM_SILENT)) {
+    if (((tpm_rc & 0xFFF) == (TPM2_RC_LOCKOUT & 0xFFF)) && !(flags & PAM_SILENT)) {
         pam_info(pamh, "TPM Dictionary Attack Lockout active. Falling back to system password.");
     }
 
@@ -166,8 +175,12 @@ int pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv)
         return PAM_SUCCESS;
     }
 
-    struct passwd *pwd = getpwnam(username);
-    if (!pwd) return PAM_SUCCESS;
+    struct passwd pwd_buf;
+    struct passwd *pwd = NULL;
+    char pbuf[1024];
+    if (getpwnam_r(username, &pwd_buf, pbuf, sizeof(pbuf), &pwd) != 0 || !pwd) {
+        return PAM_SUCCESS;
+    }
 
     tpm_pin_config_t cfg;
     tpm_pin_config_load(NULL, &cfg);

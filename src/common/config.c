@@ -1,8 +1,10 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include "tpm_pin.h"
 
@@ -91,8 +93,17 @@ bool tpm_pin_config_load(const char *path, tpm_pin_config_t *cfg) {
         } else if (strcasecmp(key, "tcti_name") == 0) {
             snprintf(cfg->tcti_name, sizeof(cfg->tcti_name), "%s", val);
         } else if (strcasecmp(key, "data_dir") == 0) {
-            snprintf(cfg->data_dir, sizeof(cfg->data_dir), "%s", val);
+            if (val[0] == '/' && strstr(val, "..") == NULL) {
+                snprintf(cfg->data_dir, sizeof(cfg->data_dir), "%s", val);
+            }
         }
+    }
+
+    if (cfg->min_length < 4) cfg->min_length = 4;
+    if (cfg->max_length > TPM_PIN_MAX_PIN_LEN) cfg->max_length = TPM_PIN_MAX_PIN_LEN;
+    if (cfg->max_length < cfg->min_length) cfg->max_length = cfg->min_length;
+    if (cfg->data_dir[0] != '/' || strstr(cfg->data_dir, "..") != NULL) {
+        snprintf(cfg->data_dir, sizeof(cfg->data_dir), "%s", TPM_PIN_DEFAULT_DATA_DIR);
     }
 
     fclose(f);
@@ -115,15 +126,29 @@ bool tpm_pin_config_save(const char *path, const tpm_pin_config_t *cfg) {
         mkdir(dir_path, 0755);
     }
 
-    FILE *f = fopen(tmp_path, "w");
-    if (!f) return false;
+    int fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0) return false;
+
+    FILE *f = fdopen(fd, "w");
+    if (!f) {
+        close(fd);
+        unlink(tmp_path);
+        return false;
+    }
+
+    uint32_t min_len = cfg->min_length < 4 ? 4 : cfg->min_length;
+    uint32_t max_len = cfg->max_length > TPM_PIN_MAX_PIN_LEN ? TPM_PIN_MAX_PIN_LEN : cfg->max_length;
+    if (max_len < min_len) max_len = min_len;
+
+    const char *safe_data_dir = (cfg->data_dir[0] == '/' && strstr(cfg->data_dir, "..") == NULL)
+                                ? cfg->data_dir : TPM_PIN_DEFAULT_DATA_DIR;
 
     fprintf(f, "# Secure PIN for Linux Configuration\n");
     fprintf(f, "# Managed automatically by tpm-pin-settings and tpm-pin-ctl\n\n");
     fprintf(f, "[Policy]\n");
     fprintf(f, "digits_only = %s\n", cfg->digits_only ? "true" : "false");
-    fprintf(f, "min_length = %u\n", cfg->min_length);
-    fprintf(f, "max_length = %u\n\n", cfg->max_length);
+    fprintf(f, "min_length = %u\n", min_len);
+    fprintf(f, "max_length = %u\n\n", max_len);
     fprintf(f, "[Scopes]\n");
     fprintf(f, "enable_login = %s\n", cfg->enable_login ? "true" : "false");
     fprintf(f, "enable_lockscreen = %s\n", cfg->enable_lockscreen ? "true" : "false");
@@ -131,16 +156,25 @@ bool tpm_pin_config_save(const char *path, const tpm_pin_config_t *cfg) {
     fprintf(f, "enable_keyring_unlock = %s\n\n", cfg->enable_keyring_unlock ? "true" : "false");
     fprintf(f, "[Security]\n");
     fprintf(f, "bind_pcr7 = %s\n", cfg->bind_pcr7 ? "true" : "false");
-    fprintf(f, "da_max_tries = %u\n", cfg->da_max_tries);
+    fprintf(f, "da_max_tries = %u\n", cfg->da_max_tries ? cfg->da_max_tries : 5);
     fprintf(f, "da_recovery_time = %u\n", cfg->da_recovery_time);
     fprintf(f, "da_lockout_recovery = %u\n\n", cfg->da_lockout_recovery);
     fprintf(f, "[System]\n");
     if (cfg->tcti_name[0]) {
         fprintf(f, "tcti_name = %s\n", cfg->tcti_name);
     }
-    fprintf(f, "data_dir = %s\n", cfg->data_dir);
+    fprintf(f, "data_dir = %s\n", safe_data_dir);
 
-    fclose(f);
+    if (ferror(f) || fflush(f) != 0 || fsync(fd) != 0) {
+        fclose(f);
+        unlink(tmp_path);
+        return false;
+    }
+
+    if (fclose(f) != 0) {
+        unlink(tmp_path);
+        return false;
+    }
 
     chmod(tmp_path, 0644);
     if (rename(tmp_path, cfg_path) != 0) {
