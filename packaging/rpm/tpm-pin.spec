@@ -65,6 +65,7 @@ fi
 %{_datadir}/metainfo/io.github.securepin.Settings.metainfo.xml
 %{_datadir}/polkit-1/actions/io.github.securepin.policy
 %{_prefix}/lib/udev/rules.d/70-tpm-pin.rules
+%{_prefix}/lib/systemd/system/polkit-agent-helper@.service.d/50-tpm-pin.conf
 %dir %attr(0700,root,root) %{_sharedstatedir}/tpm-pin
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 

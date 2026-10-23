@@ -17,7 +17,7 @@ static bool is_service_enabled(const char *service, const tpm_pin_config_t *cfg)
     if (strcmp(service, "sudo") == 0 || strcmp(service, "sudo-i") == 0 || strcmp(service, "su") == 0) {
         return cfg->enable_sudo;
     }
-    if (strstr(service, "screenlocker") || strstr(service, "lock") || strstr(service, "polkit")) {
+    if (strstr(service, "screenlocker") || strstr(service, "lock") || strstr(service, "polkit") || strstr(service, "policykit")) {
         return cfg->enable_lockscreen;
     }
     if (strcmp(service, "gdm-password") == 0) {
@@ -43,6 +43,10 @@ static void pam_cleanup_secret(pam_handle_t *pamh, void *data, int error_status)
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     (void)argc;
     (void)argv;
+
+    /* Prevent TSS2 error strings from leaking into Polkit helper socket streams */
+    setenv("TSS2_LOG", "NONE", 1);
+    setenv("TSS2_LOGFILE", "/dev/null", 1);
 
     const char *service = NULL;
     pam_get_item(pamh, PAM_SERVICE, (const void **)&service);

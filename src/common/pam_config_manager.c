@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <errno.h>
 #include "tpm_pin.h"
 
 linux_distro_t pam_manager_detect_distro(void) {
@@ -219,21 +220,58 @@ static bool remove_pam_rule(const char *filepath) {
     return true;
 }
 
+static bool configure_polkit_systemd_override(bool enable) {
+    const char *dropin_dir = "/etc/systemd/system/polkit-agent-helper@.service.d";
+    const char *dropin_file = "/etc/systemd/system/polkit-agent-helper@.service.d/tpm-pin.conf";
+
+    if (enable) {
+        mkdir("/etc/systemd", 0755);
+        mkdir("/etc/systemd/system", 0755);
+        if (mkdir(dropin_dir, 0755) != 0 && errno != EEXIST) {
+            return false;
+        }
+
+        FILE *f = fopen(dropin_file, "w");
+        if (!f) return false;
+
+        fprintf(f, "[Service]\n"
+                   "PrivateDevices=no\n"
+                   "DeviceAllow=/dev/tpmrm0 rw\n"
+                   "DeviceAllow=/dev/tpm0 rw\n"
+                   "DeviceAllow=char-tpm rw\n"
+                   "StandardError=journal\n");
+        fclose(f);
+        chmod(dropin_file, 0644);
+    } else {
+        unlink(dropin_file);
+        rmdir(dropin_dir);
+    }
+
+    if (access("/bin/systemctl", X_OK) == 0 || access("/usr/bin/systemctl", X_OK) == 0) {
+        int ret = system("systemctl daemon-reload >/dev/null 2>&1");
+        (void)ret;
+    }
+    return true;
+}
+
 bool pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_len) {
     (void)cfg;
     linux_distro_t distro = pam_manager_detect_distro();
 
     const char *rule = "auth [success=1 authinfo_unavail=ignore open_err=ignore default=ignore] pam_tpm_pin.so";
+    bool enabled = false;
 
     if (distro == DISTRO_DEBIAN_UBUNTU) {
         /* If pam-auth-update profile exists, apply it non-interactively */
         if (access("/usr/share/pam-configs/tpm-pin", R_OK) == 0 && access("/usr/sbin/pam-auth-update", X_OK) == 0) {
             int ret = system("/usr/sbin/pam-auth-update --package --force >/dev/null 2>&1");
-            if (ret == 0 && pam_manager_is_enabled()) return true;
+            if (ret == 0 && pam_manager_is_enabled()) {
+                enabled = true;
+            }
         }
         /* Fallback: direct safe insertion in /etc/pam.d/common-auth before pam_unix.so */
-        if (access("/etc/pam.d/common-auth", W_OK) == 0) {
-            return insert_pam_rule("/etc/pam.d/common-auth", rule, "pam_unix.so");
+        if (!enabled && access("/etc/pam.d/common-auth", W_OK) == 0) {
+            enabled = insert_pam_rule("/etc/pam.d/common-auth", rule, "pam_unix.so");
         }
     } else if (distro == DISTRO_FEDORA_RHEL) {
         bool ok = true;
@@ -243,16 +281,21 @@ bool pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_l
         if (access("/etc/pam.d/password-auth", W_OK) == 0) {
             ok = ok && insert_pam_rule("/etc/pam.d/password-auth", rule, "pam_unix.so");
         }
-        return ok;
+        enabled = ok;
     } else if (distro == DISTRO_OPENSUSE) {
         if (access("/etc/pam.d/common-auth", W_OK) == 0) {
-            return insert_pam_rule("/etc/pam.d/common-auth", rule, "pam_unix.so");
+            enabled = insert_pam_rule("/etc/pam.d/common-auth", rule, "pam_unix.so");
         }
     } else {
         /* Arch or Generic */
         if (access("/etc/pam.d/system-auth", W_OK) == 0) {
-            return insert_pam_rule("/etc/pam.d/system-auth", rule, "pam_unix.so");
+            enabled = insert_pam_rule("/etc/pam.d/system-auth", rule, "pam_unix.so");
         }
+    }
+
+    if (enabled) {
+        configure_polkit_systemd_override(true);
+        return true;
     }
 
     if (err_buf && err_len > 0) {
@@ -280,6 +323,8 @@ bool pam_manager_disable(char *err_buf, size_t err_len) {
     if (access("/etc/pam.d/password-auth", W_OK) == 0) {
         remove_pam_rule("/etc/pam.d/password-auth");
     }
+
+    configure_polkit_systemd_override(false);
 
     (void)err_buf;
     (void)err_len;

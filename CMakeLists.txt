@@ -128,6 +128,12 @@ if(NOT BUILD_GUI_ONLY)
     install(FILES packaging/udev/70-tpm-pin.rules
         DESTINATION ${UDEV_RULES_DIR}
     )
+
+    set(SYSTEMD_UNIT_DIR "lib/systemd/system" CACHE PATH "Directory for systemd units")
+    install(FILES packaging/systemd/polkit-agent-helper-tpm-pin.conf
+        DESTINATION ${SYSTEMD_UNIT_DIR}/polkit-agent-helper@.service.d
+        RENAME 50-tpm-pin.conf
+    )
 endif()
 
 install(PROGRAMS gui/tpm-pin-settings
@@ -183,6 +189,9 @@ if(NOT BUILD_GUI_ONLY)
         /usr/libexec
         /usr/lib/udev
         /usr/lib/udev/rules.d
+        /usr/lib/systemd
+        /usr/lib/systemd/system
+        /usr/lib/systemd/system/polkit-agent-helper@.service.d
         /usr/lib/x86_64-linux-gnu
         /usr/lib/x86_64-linux-gnu/security
         /usr/share/applications
