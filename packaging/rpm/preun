@@ -1,0 +1,5 @@
+if [ $1 -eq 0 ]; then
+    if [ -x /usr/bin/tpm-pin-ctl ]; then
+        /usr/bin/tpm-pin-ctl pam disable >/dev/null 2>&1 || :
+    fi
+fi

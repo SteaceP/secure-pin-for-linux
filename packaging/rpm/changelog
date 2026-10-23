@@ -1,0 +1,24 @@
+* Fri Oct 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.3-1
+- Add Flatpak packaging manifest with GNOME 50 runtime support
+- Add standalone Flatpak build helper script with bundle export and install options
+- Support host portal delegation via flatpak-spawn in GTK4 settings app
+- Integrate Flatpak package generation into build script and CI/CD workflow
+- Add AppStream metainfo XML metadata for software centers
+- Add %preun removal scriptlet and PAM open_err=ignore hardening to prevent uninstall lockouts
+- Add contribution guidelines and GitHub issue templates
+
+* Fri Oct 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.2-1
+- Define pam_info and pam_error as macros and enforce link safety in PAM module
+- Check chown return values and handle system call results cleanly
+- Add uaccess udev rule for TPM access and document user permissions
+- Add application icons, build packaging script, and desktop integration
+- Update GNOME Shell extension metadata, UUID, URL, and Shell 51 support
+
+* Fri Oct 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.1-1
+- Security hardening: PCR 7 policy enforcement, AES-128-CFB encrypted sessions
+- Add Microsoft Pluton, AMD PSP, and Intel PTT hardware fTPM detection
+- Fix privilege escalation, file I/O security, and empty PIN input handling
+- Multi-distro CI/CD release packaging updates
+
+* Wed Oct 21 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.0-1
+- Initial release for Fedora / RHEL

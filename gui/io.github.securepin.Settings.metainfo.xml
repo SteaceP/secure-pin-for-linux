@@ -29,6 +29,8 @@
   </developer>
   <provides>
     <binary>tpm-pin-settings</binary>
+    <binary>tpm-pin-ctl</binary>
+    <id>tpm-pin</id>
   </provides>
   <content_rating type="oars-1.1" />
   <releases>

@@ -161,6 +161,8 @@ if(NOT BUILD_GUI_ONLY)
     set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
     set(CPACK_GENERATOR "TGZ;DEB;RPM")
 
+    set(CPACK_PACKAGE_DESCRIPTION "Hardware-backed PIN authentication using TPM 2.0. Integrates with PAM for login screen (GDM/SDDM), lock screen, sudo, and desktop keyring auto-unlock. Includes a native GTK4/Libadwaita settings application.")
+    set(CPACK_DEBIAN_PACKAGE_DESCRIPTION "${CPACK_PACKAGE_DESCRIPTION}")
     set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Secure PIN Team <steace@coderage.pro>")
     set(CPACK_DEBIAN_PACKAGE_SECTION "admin")
     set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
@@ -172,7 +174,26 @@ if(NOT BUILD_GUI_ONLY)
 
     set(CPACK_RPM_PACKAGE_LICENSE "GPLv3+")
     set(CPACK_RPM_PACKAGE_GROUP "System Environment/Base")
+    set(CPACK_RPM_PACKAGE_DESCRIPTION "${CPACK_PACKAGE_DESCRIPTION}")
+    set(CPACK_RPM_CHANGELOG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/rpm/changelog")
+    set(CPACK_RPM_POST_INSTALL_SCRIPT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/rpm/postinst")
+    set(CPACK_RPM_PRE_UNINSTALL_SCRIPT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/rpm/preun")
     set(CPACK_RPM_PACKAGE_REQUIRES "pam, tpm2-tss, python3, python3-gobject, libadwaita")
+    set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
+        /usr/libexec
+        /usr/lib/udev
+        /usr/lib/udev/rules.d
+        /usr/share/applications
+        /usr/share/icons
+        /usr/share/icons/hicolor
+        /usr/share/icons/hicolor/scalable
+        /usr/share/icons/hicolor/scalable/apps
+        /usr/share/icons/hicolor/symbolic
+        /usr/share/icons/hicolor/symbolic/apps
+        /usr/share/metainfo
+        /usr/share/polkit-1
+        /usr/share/polkit-1/actions
+    )
     set(CPACK_RPM_FILE_NAME "RPM-DEFAULT")
 
     include(CPack)
