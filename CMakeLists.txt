@@ -141,6 +141,11 @@ install(FILES packaging/pam-configs/tpm-pin
     DESTINATION ${CMAKE_INSTALL_DATADIR}/pam-configs
 )
 
+set(UDEV_RULES_DIR "lib/udev/rules.d" CACHE PATH "Directory for udev rules")
+install(FILES packaging/udev/70-tpm-pin.rules
+    DESTINATION ${UDEV_RULES_DIR}
+)
+
 # CPack Packaging configuration
 set(CPACK_PACKAGE_NAME "tpm-pin")
 set(CPACK_PACKAGE_VENDOR "Secure PIN Team")

@@ -43,6 +43,7 @@ Includes a native GTK4/Libadwaita settings application.
 %{_libdir}/security/pam_tpm_pin.so
 %{_datadir}/applications/io.github.securepin.Settings.desktop
 %{_datadir}/polkit-1/actions/io.github.securepin.policy
+%{_prefix}/lib/udev/rules.d/70-tpm-pin.rules
 %dir %attr(0700,root,root) %{_sharedstatedir}/tpm-pin
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 

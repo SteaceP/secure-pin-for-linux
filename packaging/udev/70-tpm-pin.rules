@@ -1,0 +1,3 @@
+# Secure PIN for Linux
+# Grant active desktop session users read/write access to TPM 2.0 Resource Manager (/dev/tpmrm*)
+KERNEL=="tpmrm[0-9]*", TAG+="uaccess"

@@ -90,6 +90,17 @@ secure-pin-for-linux/
   sudo pacman -S cmake gcc pkgconf openssl pam tpm2-tss python python-gobject libadwaita swtpm
   ```
 
+- **TPM 2.0 User Permissions (`tss` group)**:
+
+  To query TPM status or run CLI commands as a non-root user, ensure your account is in the `tss` group:
+
+  ```bash
+  sudo usermod -aG tss $USER
+  newgrp tss # or log out and log back in
+  ```
+
+  *(Note: Installing `.deb`, `.rpm`, or Arch packages automatically configures a `uaccess` udev rule for desktop sessions).*
+
 ### 2. Build
 
 ```bash
