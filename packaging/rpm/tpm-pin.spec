@@ -1,5 +1,5 @@
 Name:           tpm-pin
-Version:        1.0.2
+Version:        1.0.3
 Release:        1%{?dist}
 Summary:        Windows Hello-style TPM 2.0 PIN authentication for Linux
 
@@ -50,6 +50,14 @@ Includes a native GTK4/Libadwaita settings application.
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 
 %changelog
+* Fri Oct 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.3-1
+- Add Flatpak packaging manifest with GNOME 50 runtime support
+- Add standalone Flatpak build helper script with bundle export and install options
+- Support host portal delegation via flatpak-spawn in GTK4 settings app
+- Integrate Flatpak package generation into build script and CI/CD workflow
+- Add AppStream metainfo XML metadata for software centers
+- Add contribution guidelines and GitHub issue templates
+
 * Fri Oct 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.2-1
 - Define pam_info and pam_error as macros and enforce link safety in PAM module
 - Check chown return values and handle system call results cleanly

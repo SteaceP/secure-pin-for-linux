@@ -1,5 +1,9 @@
 # Secure PIN for Linux (`tpm-pin`)
 
+> [!WARNING]
+> **Early Development / Use at Your Own Risk**
+> This project is in an early stage of development and directly modifies low-level PAM authentication stacks and system security settings. Use at your own risk. It is strongly recommended to test inside a virtual machine or non-production environment first, and to always have alternative root access or recovery media available.
+
 A Windows Hello–style, hardware-backed PIN authentication system for Linux using **TPM 2.0**.
 
 It integrates with **PAM** (login screen, lock screen, `sudo`, and Polkit), automatically unseals and unlocks the desktop **GNOME Keyring / KWallet**, enforces TPM **Dictionary Attack (anti-hammering) lockout**, supports **Secure Boot (PCR 7)** integrity binding, and includes a native **GTK4 / Libadwaita Settings Application**.

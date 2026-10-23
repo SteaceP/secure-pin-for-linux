@@ -32,9 +32,14 @@
   </provides>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="1.0.3" date="2026-10-23">
+      <description>
+        <p>Release 1.0.3: Flatpak packaging support with GNOME 50 runtime, sandbox host portal integration, and project documentation updates.</p>
+      </description>
+    </release>
     <release version="1.0.2" date="2026-10-23">
       <description>
-        <p>Release 1.0.2: Flatpak support, udev permissions, and security hardening.</p>
+        <p>Release 1.0.2: Security hardening, PAM safety enhancements, udev permissions, and GNOME Shell 51 support.</p>
       </description>
     </release>
     <release version="1.0.1" date="2026-10-23">

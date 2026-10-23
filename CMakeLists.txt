@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(tpm-pin VERSION 1.0.2 LANGUAGES C)
+project(tpm-pin VERSION 1.0.3 LANGUAGES C)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 17)

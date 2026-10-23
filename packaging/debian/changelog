@@ -1,3 +1,14 @@
+tpm-pin (1.0.3-1) unstable; urgency=medium
+
+  * Add Flatpak packaging manifest with GNOME 50 runtime support.
+  * Add standalone Flatpak build helper script with bundle export and install options.
+  * Support host delegation via flatpak-spawn in GTK4/Libadwaita settings app.
+  * Integrate Flatpak package generation into build script and CI/CD workflow.
+  * Add AppStream metainfo XML metadata for desktop software centers.
+  * Add comprehensive contribution guidelines and GitHub issue template.
+
+ -- Secure PIN Maintainers <steace@coderage.pro>  Fri, 23 Oct 2026 10:30:00 -0400
+
 tpm-pin (1.0.2-1) unstable; urgency=medium
 
   * Define pam_info and pam_error as macros and enforce link safety in PAM module.
