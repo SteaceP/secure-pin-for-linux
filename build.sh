@@ -163,7 +163,7 @@ if [ "$DO_PACKAGE" = true ]; then
                   git clone /src /home/builder/repo >/dev/null 2>&1
                   cd /home/builder/repo
                   git archive --format=tar.gz --prefix=tpm-pin-${VERSION}/ HEAD > /home/builder/pkg/tpm-pin-${VERSION}.tar.gz
-                  cp packaging/arch/PKGBUILD /home/builder/pkg/
+                  cp packaging/arch/PKGBUILD packaging/arch/tpm-pin.install /home/builder/pkg/
                   sed -i \"s/^pkgver=.*/pkgver=${VERSION}/\" /home/builder/pkg/PKGBUILD
                   chown -R builder:builder /home/builder
                   su builder -c 'cd /home/builder/pkg && makepkg -f --noconfirm' >/dev/null 2>&1
