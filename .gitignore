@@ -6,6 +6,8 @@ release-assets/
 _CPack_Packages/
 .flatpak-builder/
 flatpak-repo/
+packaging/arch/pkg/
+packaging/arch/src/
 
 # Compiled packages
 *.deb
