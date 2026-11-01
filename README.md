@@ -33,48 +33,6 @@ It integrates with **PAM** (login screen, lock screen, `sudo`, and Polkit), auto
 
 ---
 
-## Directory Structure
-
-```text
-secure-pin-for-linux/
-├── CMakeLists.txt                # Universal CMake build & CPack configuration
-├── include/                      # Core APIs and TSS2/PAM compatibility headers
-│   ├── tpm_pin.h
-│   ├── security/                 # PAM headers
-│   └── tss2/                     # TPM 2.0 ESYS & TCTI headers
-├── src/
-│   ├── common/
-│   │   ├── crypto.c              # OpenSSL AES-256-GCM & PBKDF2-HMAC-SHA256
-│   │   ├── policy.c              # PIN validation & candidate policy filtering
-│   │   ├── config.c              # /etc/tpm-pin/config.conf parser & writer
-│   │   ├── pam_config_manager.c  # Distro-aware PAM manager & safe backups
-│   │   └── user_manager.c        # User enrollment, TPM sealing & unsealing
-│   ├── tpm/
-│   │   └── tpm_engine.c          # ESYS primary key creation, sealing & DA control
-│   ├── pam/
-│   │   └── pam_tpm_pin.c         # PAM module (authenticate, setcred, chauthtok)
-│   └── cli/
-│       ├── tpm_pin_ctl.c         # Command-line control & admin tool
-│       └── tpm_pin_verify.c      # Minimal lockscreen verification helper
-├── gui/
-│   ├── tpm-pin-settings          # GTK4 / Libadwaita settings application
-│   ├── io.github.securepin.Settings.desktop
-│   ├── io.github.securepin.Settings.metainfo.xml
-│   ├── io.github.securepin.policy
-│   └── gnome-extension/          # GNOME Shell quick-settings toggle
-├── packaging/
-│   ├── pam-configs/tpm-pin       # pam-auth-update profile for Debian/Ubuntu
-│   ├── debian/                   # Debian package metadata
-│   ├── rpm/tpm-pin.spec          # RPM spec file for Fedora/RHEL
-│   ├── arch/PKGBUILD             # Arch Linux PKGBUILD
-│   └── flatpak/                  # Flatpak builder manifest & build automation
-└── tests/
-    ├── test_pam_harness.c        # Automated unit & integration tests
-    └── run_tests.sh              # swtpm/TPM test runner
-```
-
----
-
 ## Building & Testing
 
 ### 1. Prerequisites
@@ -108,21 +66,6 @@ secure-pin-for-linux/
 
   *(Note: Installing `.deb`, `.rpm`, or Arch packages automatically configures a `uaccess` udev rule for desktop sessions).*
 
-### 2. Build & Package Locally
-
-Use the build script to compile the project and generate distribution packages into `dist/`:
-
-```bash
-# Build binaries and all release packages (.deb, .rpm, .tar.gz) into ./dist
-./build.sh
-
-# Or compile binaries only without packaging:
-./build.sh --no-package
-
-# Or clean build outputs and rebuild:
-./build.sh --clean
-```
-
 Alternatively, you can build and install manually with CMake:
 
 ```bash
@@ -143,14 +86,6 @@ sudo make install
 >   ```
 >
 >   or by toggling **"Enable TPM PIN in PAM"** in the GTK Settings application (`tpm-pin-settings`).
-
-### 3. Run Automated Tests
-
-The test suite runs against your hardware TPM (if `/dev/tpmrm0` is available) or automatically starts an isolated `swtpm` TPM 2.0 instance:
-
-```bash
-./tests/run_tests.sh
-```
 
 ---
 
@@ -204,56 +139,6 @@ To disable and revert PAM configuration:
 ```bash
 sudo ./build/tpm-pin-ctl pam disable
 ```
-
----
-
-## Distribution Packaging
-
-The easiest way to generate all packages locally is via the build script, which outputs to `dist/` and computes SHA-256 checksums:
-
-```bash
-./build.sh
-```
-
-To build individual packages manually:
-
-- **Build `.deb` package**:
-
-  ```bash
-  cd build && cpack -G DEB
-  ```
-
-- **Build `.tar.gz` package**:
-
-  ```bash
-  cd build && cpack -G TGZ
-  ```
-
-- **Build `.rpm` package** (on Fedora/RHEL):
-
-  ```bash
-  cd build && cpack -G RPM
-  # or using rpmbuild:
-  rpmbuild -ba packaging/rpm/tpm-pin.spec
-  ```
-
-- **Build on Arch Linux**:
-
-  ```bash
-  cd packaging/arch && makepkg -si
-  ```
-
-- **Build Flatpak package (`.flatpak`)**:
-
-  ```bash
-  # Using the build script:
-  ./build.sh --flatpak
-  # Or via the standalone Flatpak helper:
-  ./packaging/flatpak/build-flatpak.sh --bundle
-  # Or install locally for the current user:
-  ./packaging/flatpak/build-flatpak.sh --install
-  ```
-
 ---
 
 ## Contributing
