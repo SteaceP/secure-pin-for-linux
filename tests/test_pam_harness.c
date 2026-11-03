@@ -439,10 +439,14 @@ static bool test_pam_service_allowlist(void) {
 
     /* Remote / background services must NEVER be allowed */
     if (tpm_pin_is_service_enabled("sshd", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("dropbear", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("rlogin", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("telnet", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("system-remote-login", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("cockpit", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("crond", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("xrdp-sesman", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("tightvnc", false, &cfg)) return false;
 
     /* Display managers (greetd, SDDM, GDM, ly) follow enable_login */
     cfg.enable_login = true;

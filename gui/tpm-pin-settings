@@ -249,7 +249,7 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
 
         # Group: Hardware TPM Controls
         grp_tpm = Adw.PreferencesGroup()
-        grp_tpm.set_title("Hardware Anti-Hammering &amp; Boot Protection")
+        grp_tpm.set_title("Hardware Anti-Hammering & Boot Protection")
 
         self.sw_pcr = Adw.SwitchRow()
         self.sw_pcr.set_title("Bind to Secure Boot (PCR 7)")
@@ -465,8 +465,12 @@ class EnrollPinDialog(Adw.PreferencesWindow):
 
         self.row_confirm = Adw.PasswordEntryRow()
         self.row_confirm.set_title("Confirm PIN")
-        self.row_confirm.connect("entry-activated", self.on_save)
         grp.add(self.row_confirm)
+
+        if self.need_pwd:
+            self.row_pwd.connect("entry-activated", lambda w: self.row_pin.grab_focus())
+        self.row_pin.connect("entry-activated", lambda w: self.row_confirm.grab_focus())
+        self.row_confirm.connect("entry-activated", self.on_save)
 
         page.add(grp)
         self.add(page)
@@ -519,6 +523,13 @@ class EnrollPinDialog(Adw.PreferencesWindow):
         target_user = self.parent_win.state.get("user")
         cmd = ["enroll", "--user", target_user] if target_user and target_user != "unknown" else ["enroll"]
         ok, msg = self.parent_win.run_ctl(cmd, need_root=True, input_text=input_data)
+
+        # Clear memory in UI widgets
+        if self.need_pwd:
+            self.row_pwd.set_text("")
+        self.row_pin.set_text("")
+        self.row_confirm.set_text("")
+
         if ok:
             self.close()
             self.parent_win.refresh_ui()

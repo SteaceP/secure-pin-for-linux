@@ -78,12 +78,16 @@ bool tpm_pin_is_service_enabled(const char *service, bool unprivileged_caller, c
 
     /* Explicitly deny remote and non-interactive services before substring checks (e.g. "rlogin", "system-remote-login") */
     if (strcmp(service, "sshd") == 0 ||
+        strcmp(service, "dropbear") == 0 ||
         strcmp(service, "rlogin") == 0 ||
         strcmp(service, "rsh") == 0 ||
+        strcmp(service, "telnet") == 0 ||
         strcmp(service, "cockpit") == 0 ||
         strcmp(service, "cron") == 0 ||
         strcmp(service, "crond") == 0 ||
-        strstr(service, "remote") != NULL) {
+        strstr(service, "remote") != NULL ||
+        strstr(service, "xrdp") != NULL ||
+        strstr(service, "vnc") != NULL) {
         return false;
     }
 

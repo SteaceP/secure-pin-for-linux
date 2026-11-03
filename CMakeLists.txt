@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(tpm-pin VERSION 1.0.4 LANGUAGES C)
+project(tpm-pin VERSION 1.0.5 LANGUAGES C)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 17)
@@ -32,7 +32,7 @@ include(GNUInstallDirs)
 
 if(NOT BUILD_GUI_ONLY)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        add_compile_options(-Wall -Wextra)
+        add_compile_options(-Wall -Wextra -Wformat=2 -Wformat-security -Werror=format-security -fstack-protector-strong)
     endif()
 
     include_directories(

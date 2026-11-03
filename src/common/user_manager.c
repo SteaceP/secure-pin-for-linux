@@ -24,11 +24,21 @@ static void get_user_dir_path(uid_t uid, const tpm_pin_config_t *cfg, char *out_
     snprintf(out_path, out_len, "%s/%u", base_dir, (unsigned int)uid);
 }
 
-static FILE *open_regular_file_ro(const char *path) {
+static FILE *open_regular_file_ro(const char *path, uid_t expected_uid) {
     int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return NULL;
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        return NULL;
+    }
+    /* Ensure file is owned by root, the expected user, or the current effective user */
+    if (st.st_uid != expected_uid && st.st_uid != 0 && st.st_uid != geteuid()) {
+        close(fd);
+        return NULL;
+    }
+    /* Ensure sane file size */
+    if (st.st_size < (off_t)sizeof(tpm_sealed_header_t) || st.st_size > 65536) {
         close(fd);
         return NULL;
     }
@@ -53,6 +63,26 @@ bool tpm_pin_user_is_enrolled(uid_t uid, const tpm_pin_config_t *cfg) {
 bool tpm_pin_remove_user(uid_t uid, const tpm_pin_config_t *cfg) {
     char path[512];
     get_user_blob_path(uid, cfg, path, sizeof(path));
+
+    /* Securely overwrite blob contents with zeroes before unlinking */
+    int fd = open(path, O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd >= 0) {
+        struct stat st;
+        if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 && st.st_size <= 65536) {
+            uint8_t zero_buf[512] = {0};
+            off_t remaining = st.st_size;
+            while (remaining > 0) {
+                size_t to_write = (remaining > (off_t)sizeof(zero_buf)) ? sizeof(zero_buf) : (size_t)remaining;
+                if (write(fd, zero_buf, to_write) <= 0) break;
+                remaining -= (off_t)to_write;
+            }
+            if (fsync(fd) != 0) {
+                /* fsync attempted */
+            }
+        }
+        close(fd);
+    }
+
     if (unlink(path) == 0) {
         char dir[512];
         get_user_dir_path(uid, cfg, dir, sizeof(dir));
@@ -121,6 +151,7 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
         tpm_pin_zero(salt, sizeof(salt));
         tpm_pin_zero(master_key, sizeof(master_key));
         tpm_pin_zero(&priv, sizeof(priv));
+        tpm_pin_zero(&pub, sizeof(pub));
         return false;
     }
 
@@ -130,6 +161,7 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
         tpm_pin_zero(salt, sizeof(salt));
         tpm_pin_zero(master_key, sizeof(master_key));
         tpm_pin_zero(&priv, sizeof(priv));
+        tpm_pin_zero(&pub, sizeof(pub));
         return false;
     }
     size_t magic_len = strlen(TPM_PIN_VERIFY_TOKEN_MAGIC) + 1;
@@ -140,6 +172,7 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
         tpm_pin_zero(salt, sizeof(salt));
         tpm_pin_zero(master_key, sizeof(master_key));
         tpm_pin_zero(&priv, sizeof(priv));
+        tpm_pin_zero(&pub, sizeof(pub));
         return false;
     }
 
@@ -156,6 +189,7 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
         tpm_pin_zero(salt, sizeof(salt));
         tpm_pin_zero(master_key, sizeof(master_key));
         tpm_pin_zero(&priv, sizeof(priv));
+        tpm_pin_zero(&pub, sizeof(pub));
         return false;
     }
 
@@ -169,6 +203,7 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
     if (!enc_ok) {
         tpm_pin_zero(salt, sizeof(salt));
         tpm_pin_zero(&priv, sizeof(priv));
+        tpm_pin_zero(&pub, sizeof(pub));
         if (ciphertext) free(ciphertext);
         return false;
     }
@@ -180,17 +215,20 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
     mkdir(base_dir, 0755);
     chmod(base_dir, 0755);
     mkdir(dir_path, 0700);
+    chmod(dir_path, 0700);
 
     char blob_path[512];
     get_user_blob_path(uid, cfg, blob_path, sizeof(blob_path));
 
     char tmp_path[1024];
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", blob_path, (int)getpid());
+    unlink(tmp_path);
 
-    int fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+    int fd = open(tmp_path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0) {
         tpm_pin_zero(salt, sizeof(salt));
         tpm_pin_zero(&priv, sizeof(priv));
+        tpm_pin_zero(&pub, sizeof(pub));
         free(ciphertext);
         return false;
     }
@@ -201,6 +239,7 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
         unlink(tmp_path);
         tpm_pin_zero(salt, sizeof(salt));
         tpm_pin_zero(&priv, sizeof(priv));
+        tpm_pin_zero(&pub, sizeof(pub));
         free(ciphertext);
         return false;
     }
@@ -226,12 +265,14 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
         fflush(f) != 0 ||
         fsync(fd) != 0) {
         tpm_pin_zero(&priv, sizeof(priv));
+        tpm_pin_zero(&pub, sizeof(pub));
         fclose(f);
         unlink(tmp_path);
         free(ciphertext);
         return false;
     }
     tpm_pin_zero(&priv, sizeof(priv));
+    tpm_pin_zero(&pub, sizeof(pub));
     if (fclose(f) != 0) {
         unlink(tmp_path);
         free(ciphertext);
@@ -281,7 +322,7 @@ bool tpm_pin_verify_user(uid_t uid, const char *pin, const tpm_pin_config_t *cfg
     char blob_path[512];
     get_user_blob_path(uid, cfg, blob_path, sizeof(blob_path));
 
-    FILE *f = open_regular_file_ro(blob_path);
+    FILE *f = open_regular_file_ro(blob_path, uid);
     if (!f) return false;
 
     tpm_sealed_header_t hdr;
@@ -307,6 +348,7 @@ bool tpm_pin_verify_user(uid_t uid, const char *pin, const tpm_pin_config_t *cfg
     if (fread(&priv, hdr.tpm_priv_size, 1, f) != 1 ||
         fread(&pub, hdr.tpm_pub_size, 1, f) != 1) {
         tpm_pin_zero(&priv, sizeof(priv));
+        tpm_pin_zero(&pub, sizeof(pub));
         fclose(f);
         return false;
     }
@@ -314,6 +356,7 @@ bool tpm_pin_verify_user(uid_t uid, const char *pin, const tpm_pin_config_t *cfg
     uint8_t *ciphertext = (uint8_t *)malloc(hdr.enc_payload_size);
     if (!ciphertext || fread(ciphertext, 1, hdr.enc_payload_size, f) != hdr.enc_payload_size) {
         tpm_pin_zero(&priv, sizeof(priv));
+        tpm_pin_zero(&pub, sizeof(pub));
         if (ciphertext) free(ciphertext);
         fclose(f);
         return false;
@@ -323,6 +366,7 @@ bool tpm_pin_verify_user(uid_t uid, const char *pin, const tpm_pin_config_t *cfg
     uint8_t auth[32];
     if (!tpm_pin_derive_auth(pin, hdr.salt, sizeof(hdr.salt), auth, sizeof(auth))) {
         tpm_pin_zero(&priv, sizeof(priv));
+        tpm_pin_zero(&pub, sizeof(pub));
         free(ciphertext);
         return false;
     }
@@ -331,6 +375,7 @@ bool tpm_pin_verify_user(uid_t uid, const char *pin, const tpm_pin_config_t *cfg
     TSS2_RC rc = tpm_engine_init(cfg->tcti_name, &esys);
     if (rc != TSS2_RC_SUCCESS || !esys) {
         tpm_pin_zero(&priv, sizeof(priv));
+        tpm_pin_zero(&pub, sizeof(pub));
         tpm_pin_zero(auth, sizeof(auth));
         free(ciphertext);
         return false;
@@ -349,6 +394,7 @@ bool tpm_pin_verify_user(uid_t uid, const char *pin, const tpm_pin_config_t *cfg
     );
 
     tpm_pin_zero(&priv, sizeof(priv));
+    tpm_pin_zero(&pub, sizeof(pub));
     tpm_pin_zero(auth, sizeof(auth));
     tpm_engine_destroy(&esys);
 
@@ -385,9 +431,12 @@ bool tpm_pin_verify_user(uid_t uid, const char *pin, const tpm_pin_config_t *cfg
         return false;
     }
 
-    if (unsealed_password && pwd_buf_size > 0 && (hdr.flags & FLAG_KEYRING_PWD_STORED)) {
-        const char *pwd = (const char *)(plaintext + magic_len);
-        snprintf(unsealed_password, pwd_buf_size, "%.*s", (int)(hdr.enc_payload_size - magic_len), pwd);
+    if (unsealed_password && pwd_buf_size > 0) {
+        unsealed_password[0] = '\0';
+        if (hdr.flags & FLAG_KEYRING_PWD_STORED) {
+            const char *pwd = (const char *)(plaintext + magic_len);
+            snprintf(unsealed_password, pwd_buf_size, "%.*s", (int)(hdr.enc_payload_size - magic_len), pwd);
+        }
     }
 
     tpm_pin_zero(plaintext, hdr.enc_payload_size + 1);
@@ -410,10 +459,12 @@ bool tpm_pin_get_user_status(uid_t uid, const tpm_pin_config_t *cfg, tpm_pin_sta
     if (status->is_enrolled) {
         char blob_path[512];
         get_user_blob_path(uid, cfg, blob_path, sizeof(blob_path));
-        FILE *f = open_regular_file_ro(blob_path);
+        FILE *f = open_regular_file_ro(blob_path, uid);
         if (f) {
             tpm_sealed_header_t hdr;
-            if (fread(&hdr, sizeof(hdr), 1, f) == 1 && hdr.magic == TPM_PIN_MAGIC) {
+            if (fread(&hdr, sizeof(hdr), 1, f) == 1 &&
+                hdr.magic == TPM_PIN_MAGIC &&
+                hdr.version == TPM_PIN_VERSION) {
                 status->pcr7_bound = (hdr.flags & FLAG_PCR7_BOUND) != 0;
                 status->keyring_pwd_saved = (hdr.flags & FLAG_KEYRING_PWD_STORED) != 0;
             }

@@ -123,18 +123,37 @@ static bool create_backup(const char *filepath, char *backup_out, size_t backup_
     char dir[256];
     snprintf(dir, sizeof(dir), "/etc/tpm-pin/pam-backups/%ld", (long)now);
     mkdir("/etc/tpm-pin", 0755);
-    mkdir("/etc/tpm-pin/pam-backups", 0755);
-    mkdir(dir, 0755);
+    chmod("/etc/tpm-pin", 0755);
+    mkdir("/etc/tpm-pin/pam-backups", 0700);
+    chmod("/etc/tpm-pin/pam-backups", 0700);
+    mkdir(dir, 0700);
+    chmod(dir, 0700);
 
     const char *basename = strrchr(filepath, '/');
     basename = basename ? basename + 1 : filepath;
 
     snprintf(backup_out, backup_len, "%s/%s", dir, basename);
 
-    FILE *src = fopen(filepath, "r");
+    struct stat st;
+    mode_t orig_mode = 0600;
+    if (stat(filepath, &st) == 0) {
+        orig_mode = st.st_mode & 07777;
+    }
+
+    FILE *src = fopen(filepath, "re");
     if (!src) return false;
-    FILE *dst = fopen(backup_out, "w");
-    if (!dst) { fclose(src); return false; }
+
+    int dst_fd = open(backup_out, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, orig_mode);
+    if (dst_fd < 0) {
+        fclose(src);
+        return false;
+    }
+    FILE *dst = fdopen(dst_fd, "we");
+    if (!dst) {
+        close(dst_fd);
+        fclose(src);
+        return false;
+    }
 
     char buf[4096];
     size_t n;
@@ -142,11 +161,15 @@ static bool create_backup(const char *filepath, char *backup_out, size_t backup_
         if (fwrite(buf, 1, n, dst) != n) {
             fclose(src);
             fclose(dst);
+            unlink(backup_out);
             return false;
         }
     }
     fclose(src);
-    fclose(dst);
+    if (fflush(dst) != 0 || fsync(dst_fd) != 0 || fclose(dst) != 0) {
+        unlink(backup_out);
+        return false;
+    }
     return true;
 }
 
@@ -154,17 +177,23 @@ static bool insert_pam_rule(const char *filepath, const char *rule, const char *
     char backup[512];
     create_backup(filepath, backup, sizeof(backup));
 
-    FILE *in = fopen(filepath, "r");
+    struct stat orig_st;
+    mode_t orig_mode = 0644;
+    if (stat(filepath, &orig_st) == 0) {
+        orig_mode = orig_st.st_mode & 07777;
+    }
+
+    FILE *in = fopen(filepath, "re");
     if (!in) return false;
 
     char tmp_file[512];
     snprintf(tmp_file, sizeof(tmp_file), "%s.tpm_tmp.%d", filepath, (int)getpid());
-    int fd = open(tmp_file, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    int fd = open(tmp_file, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, orig_mode);
     if (fd < 0) {
         fclose(in);
         return false;
     }
-    FILE *out = fdopen(fd, "w");
+    FILE *out = fdopen(fd, "we");
     if (!out) {
         close(fd);
         unlink(tmp_file);
@@ -176,14 +205,8 @@ static bool insert_pam_rule(const char *filepath, const char *rule, const char *
     bool inserted = false;
     bool needle_exists = before_needle ? file_contains_auth_module(filepath, before_needle) : false;
 
-    if (!needle_exists) {
-        /* Prepend at the beginning of the auth stack if before_needle isn't found */
-        fprintf(out, "%s\n", rule);
-        inserted = true;
-    }
-
     while (fgets(line, sizeof(line), in)) {
-        if (!inserted && before_needle &&
+        if (!inserted && needle_exists && before_needle &&
             is_auth_rule_line(line) &&
             strstr(line, before_needle) &&
             !strstr(line, "pam_tpm_pin.so")) {
@@ -199,10 +222,19 @@ static bool insert_pam_rule(const char *filepath, const char *rule, const char *
                 fprintf(out, "%s\n", rule);
             }
             inserted = true;
+        } else if (!inserted && !needle_exists && is_auth_rule_line(line) && !strstr(line, "pam_tpm_pin.so")) {
+            /* If anchor wasn't found, insert right before the first auth line to preserve any headers/comments */
+            fprintf(out, "%s\n", rule);
+            inserted = true;
         }
         if (!(is_auth_rule_line(line) && strstr(line, "pam_tpm_pin.so"))) {
             fputs(line, out);
         }
+    }
+
+    if (!inserted) {
+        fprintf(out, "%s\n", rule);
+        inserted = true;
     }
 
     fclose(in);
@@ -216,7 +248,7 @@ static bool insert_pam_rule(const char *filepath, const char *rule, const char *
         return false;
     }
 
-    chmod(tmp_file, 0644);
+    chmod(tmp_file, orig_mode);
     if (rename(tmp_file, filepath) != 0) {
         unlink(tmp_file);
         return false;
@@ -246,17 +278,23 @@ bool pam_manager_remove_from_file(const char *filepath) {
     char backup[512];
     create_backup(filepath, backup, sizeof(backup));
 
-    FILE *in = fopen(filepath, "r");
+    struct stat orig_st;
+    mode_t orig_mode = 0644;
+    if (stat(filepath, &orig_st) == 0) {
+        orig_mode = orig_st.st_mode & 07777;
+    }
+
+    FILE *in = fopen(filepath, "re");
     if (!in) return false;
 
     char tmp_file[512];
     snprintf(tmp_file, sizeof(tmp_file), "%s.tpm_tmp.%d", filepath, (int)getpid());
-    int fd = open(tmp_file, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    int fd = open(tmp_file, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, orig_mode);
     if (fd < 0) {
         fclose(in);
         return false;
     }
-    FILE *out = fdopen(fd, "w");
+    FILE *out = fdopen(fd, "we");
     if (!out) {
         close(fd);
         unlink(tmp_file);
@@ -282,7 +320,7 @@ bool pam_manager_remove_from_file(const char *filepath) {
         return false;
     }
 
-    chmod(tmp_file, 0644);
+    chmod(tmp_file, orig_mode);
     if (rename(tmp_file, filepath) != 0) {
         unlink(tmp_file);
         return false;
@@ -294,7 +332,7 @@ bool pam_manager_configure_arch_keyring_file(const char *filepath, bool enable) 
     if (!filepath) return false;
     if (access(filepath, R_OK | W_OK) != 0) return true;
 
-    FILE *scan = fopen(filepath, "r");
+    FILE *scan = fopen(filepath, "re");
     if (!scan) return false;
 
     bool in_block = false;
@@ -334,17 +372,23 @@ bool pam_manager_configure_arch_keyring_file(const char *filepath, bool enable) 
     char backup[512];
     create_backup(filepath, backup, sizeof(backup));
 
-    FILE *in = fopen(filepath, "r");
+    struct stat orig_st;
+    mode_t orig_mode = 0644;
+    if (stat(filepath, &orig_st) == 0) {
+        orig_mode = orig_st.st_mode & 07777;
+    }
+
+    FILE *in = fopen(filepath, "re");
     if (!in) return false;
 
     char tmp_file[512];
     snprintf(tmp_file, sizeof(tmp_file), "%s.tpm_kr_tmp.%d", filepath, (int)getpid());
-    int fd = open(tmp_file, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    int fd = open(tmp_file, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, orig_mode);
     if (fd < 0) {
         fclose(in);
         return false;
     }
-    FILE *out = fdopen(fd, "w");
+    FILE *out = fdopen(fd, "we");
     if (!out) {
         close(fd);
         unlink(tmp_file);
@@ -399,7 +443,7 @@ bool pam_manager_configure_arch_keyring_file(const char *filepath, bool enable) 
         return false;
     }
 
-    chmod(tmp_file, 0644);
+    chmod(tmp_file, orig_mode);
     if (rename(tmp_file, filepath) != 0) {
         unlink(tmp_file);
         return false;
@@ -414,12 +458,15 @@ static bool configure_polkit_and_udev_overrides(bool enable) {
 
     if (enable) {
         mkdir("/etc/systemd", 0755);
+        chmod("/etc/systemd", 0755);
         mkdir("/etc/systemd/system", 0755);
+        chmod("/etc/systemd/system", 0755);
         if (mkdir(dropin_dir, 0755) != 0 && errno != EEXIST) {
             return false;
         }
+        chmod(dropin_dir, 0755);
 
-        FILE *f = fopen(dropin_file, "w");
+        FILE *f = fopen(dropin_file, "we");
         if (!f) return false;
 
         fprintf(f, "[Service]\n"
@@ -428,18 +475,24 @@ static bool configure_polkit_and_udev_overrides(bool enable) {
                    "DeviceAllow=/dev/tpm0 rw\n"
                    "DeviceAllow=char-tpm rw\n"
                    "StandardError=journal\n");
-        fclose(f);
+        if (fflush(f) != 0 || fclose(f) != 0) {
+            unlink(dropin_file);
+            return false;
+        }
         chmod(dropin_file, 0644);
 
         /* Ensure uaccess udev rule exists even when running from a source build */
         if (access("/usr/lib/udev/rules.d/70-tpm-pin.rules", R_OK) != 0 &&
             access("/lib/udev/rules.d/70-tpm-pin.rules", R_OK) != 0) {
             mkdir("/etc/udev", 0755);
+            chmod("/etc/udev", 0755);
             mkdir("/etc/udev/rules.d", 0755);
-            FILE *uf = fopen(etc_udev_rule, "w");
+            chmod("/etc/udev/rules.d", 0755);
+            FILE *uf = fopen(etc_udev_rule, "we");
             if (uf) {
                 fprintf(uf, "# Managed by tpm-pin\n"
                             "KERNEL==\"tpmrm[0-9]*\", TAG+=\"uaccess\"\n");
+                fflush(uf);
                 fclose(uf);
                 chmod(etc_udev_rule, 0644);
             }
@@ -450,14 +503,22 @@ static bool configure_polkit_and_udev_overrides(bool enable) {
         unlink(etc_udev_rule);
     }
 
-    if (access("/bin/systemctl", X_OK) == 0 || access("/usr/bin/systemctl", X_OK) == 0) {
-        int ret = system("systemctl daemon-reload >/dev/null 2>&1");
+    const char *systemctl_bin = (access("/usr/bin/systemctl", X_OK) == 0) ? "/usr/bin/systemctl"
+                              : (access("/bin/systemctl", X_OK) == 0) ? "/bin/systemctl" : NULL;
+    if (systemctl_bin) {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "%s daemon-reload >/dev/null 2>&1", systemctl_bin);
+        int ret = system(cmd);
         (void)ret;
     }
 
-    if (access("/bin/udevadm", X_OK) == 0 || access("/usr/bin/udevadm", X_OK) == 0) {
-        int ret = system("udevadm control --reload >/dev/null 2>&1 && "
-                         "udevadm trigger --action=change --subsystem-match=tpmrm >/dev/null 2>&1");
+    const char *udevadm_bin = (access("/usr/bin/udevadm", X_OK) == 0) ? "/usr/bin/udevadm"
+                            : (access("/bin/udevadm", X_OK) == 0) ? "/bin/udevadm" : NULL;
+    if (udevadm_bin) {
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), "%s control --reload >/dev/null 2>&1 && %s trigger --action=change --subsystem-match=tpmrm >/dev/null 2>&1",
+                 udevadm_bin, udevadm_bin);
+        int ret = system(cmd);
         (void)ret;
     }
     return true;

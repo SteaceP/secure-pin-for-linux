@@ -1,5 +1,5 @@
 Name:           tpm-pin
-Version:        1.0.4
+Version:        1.0.5
 Release:        1%{?dist}
 Summary:        Windows Hello-style TPM 2.0 PIN authentication for Linux
 
@@ -70,6 +70,15 @@ fi
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 
 %changelog
+* Tue Nov 03 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.5-1
+- Enforce best coding practices, compiler security flags, and static analysis recommendations
+- Securely cleanse sensitive cryptographic structures, derived PIN auth, and plaintext keys from memory
+- Overwrite credential blobs with zeroes before unlinking to eliminate raw storage remnants
+- Enforce strict 0700 file and directory permissions and atomic creation with O_EXCL
+- Expand PAM service deny-list to reject remote authentication protocols (telnet, dropbear, xrdp, vnc)
+- Preserve original PAM configuration file modes and secure PAM backups
+- Polish GTK4/Libadwaita settings app with focus advancement on Enter and sanitize secret entries
+
 * Fri Oct 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.4-1
 - Fix Arch Linux packaging by bundling tpm-pin.install in Docker build context
 - Ensure PAM module compatibility on RPM distros by symlinking /usr/lib64/security

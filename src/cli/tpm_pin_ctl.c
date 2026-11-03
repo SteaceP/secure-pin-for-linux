@@ -38,12 +38,15 @@ static char *read_secret(const char *prompt) {
     }
 
     if (read_bytes <= 0 || !line) {
-        if (line) free(line);
+        if (line) {
+            tpm_pin_zero(line, len);
+            free(line);
+        }
         return NULL;
     }
 
-    if (line[read_bytes - 1] == '\n') {
-        line[read_bytes - 1] = '\0';
+    while (read_bytes > 0 && (line[read_bytes - 1] == '\n' || line[read_bytes - 1] == '\r')) {
+        line[--read_bytes] = '\0';
     }
     return line;
 }
@@ -107,8 +110,8 @@ int main(int argc, char **argv) {
         username = user_buf;
     } else {
         if (caller_uid == 0) {
-            const char *pkexec_uid = getenv("PKEXEC_UID");
-            const char *sudo_uid = getenv("SUDO_UID");
+            const char *pkexec_uid = secure_getenv("PKEXEC_UID");
+            const char *sudo_uid = secure_getenv("SUDO_UID");
             const char *orig_uid_str = pkexec_uid ? pkexec_uid : sudo_uid;
             if (orig_uid_str && orig_uid_str[0] != '\0') {
                 char *endptr = NULL;
