@@ -6,5 +6,6 @@ Icon=io.github.securepin.Settings
 Terminal=false
 Type=Application
 StartupNotify=true
+StartupWMClass=io.github.securepin.Settings
 Categories=GNOME;GTK;Settings;Security;System;
 Keywords=PIN;Security;TPM;Windows Hello;Password;Login;Sudo;Authentication;

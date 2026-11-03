@@ -142,7 +142,7 @@ typedef struct {
 
 typedef struct {
     UINT16 size;
-    BYTE   buffer[1024];
+    BYTE   buffer[64];
 } TPM2B_DATA;
 
 typedef TPM2B_DIGEST TPM2B_NONCE;
@@ -159,7 +159,7 @@ typedef struct {
 } TPM2B_PRIVATE;
 
 typedef struct {
-    TPMI_ALG_HASH hashAlg;
+    TPMI_ALG_HASH hash;
     BYTE          sizeofSelect;
     BYTE          pcrSelect[TPM2_PCR_SELECT_MAX];
 } TPMS_PCR_SELECTION;
@@ -182,12 +182,17 @@ typedef struct {
     TPMT_KEYEDHASH_SCHEME scheme;
 } TPMS_KEYEDHASH_PARMS;
 
+typedef union {
+    TPMI_ALG_SYM_MODE aes;
+    TPMI_ALG_SYM_MODE sym;
+} TPMU_SYM_MODE;
+
 typedef struct {
     TPMI_ALG_SYM_OBJECT algorithm;
     union {
         UINT16 aes;
     } keyBits;
-    TPMI_ALG_SYM_MODE mode;
+    TPMU_SYM_MODE mode;
 } TPMT_SYM_DEF_OBJECT;
 
 typedef struct {

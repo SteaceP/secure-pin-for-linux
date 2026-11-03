@@ -139,6 +139,7 @@ int main(int argc, char **argv) {
         if (json_output) {
             printf("{\n");
             printf("  \"tpm_present\": %s,\n", status.tpm_present ? "true" : "false");
+            printf("  \"tpm_accessible\": %s,\n", status.tpm_accessible ? "true" : "false");
             printf("  \"tpm_manufacturer\": \"%s\",\n", status.manufacturer[0] ? status.manufacturer : "TPM 2.0");
             printf("  \"hardware_type\": \"%s\",\n", status.hardware_type[0] ? status.hardware_type : "TPM 2.0");
             printf("  \"bus_encryption\": \"%s\",\n", status.bus_encryption[0] ? status.bus_encryption : "Active");
@@ -164,8 +165,14 @@ int main(int argc, char **argv) {
             printf("  \"enable_keyring_unlock\": %s\n", cfg.enable_keyring_unlock ? "true" : "false");
             printf("}\n");
         } else {
+            const char *tpm_state_str = "Not Found";
+            if (status.tpm_present && status.tpm_accessible) {
+                tpm_state_str = "Detected & Ready";
+            } else if (status.tpm_present) {
+                tpm_state_str = "Detected (Activate PAM or run with sudo for direct TPM access)";
+            }
             printf("=== Secure PIN for Linux Status ===\n");
-            printf("TPM 2.0 Device:         %s\n", status.tpm_present ? "Detected & Ready" : "Not Found");
+            printf("TPM 2.0 Device:         %s\n", tpm_state_str);
             printf("Hardware Security:      %s\n", status.hardware_type[0] ? status.hardware_type : "TPM 2.0");
             printf("Bus Protection:         %s\n", status.bus_encryption[0] ? status.bus_encryption : "Active");
             printf("Target User:            %s (UID: %u)\n", username ? username : "unknown", (unsigned int)uid);
@@ -180,7 +187,7 @@ int main(int argc, char **argv) {
                    cfg.min_length, cfg.max_length);
             printf("TPM DA Lockout Max:     %u failed attempts (cooldown: %u sec)\n",
                    cfg.da_max_tries, cfg.da_recovery_time);
-            if (status.tpm_present) {
+            if (status.tpm_present && status.tpm_accessible) {
                 printf("TPM Hardware DA State:  %s (%u / %u failed tries)\n",
                        status.is_locked_out ? "LOCKED OUT" : "Ready",
                        status.failed_tries, status.max_tries);
@@ -191,10 +198,17 @@ int main(int argc, char **argv) {
 
     if (strcmp(action, "enroll") == 0) {
         tpm_pin_status_t status;
-        if (tpm_pin_get_user_status(uid, &cfg, &status) && !status.tpm_present) {
-            fprintf(stderr, "Error: TPM 2.0 device was not detected or accessible on this system.\n");
-            fprintf(stderr, "Cannot enroll a hardware-backed PIN without a functional TPM 2.0.\n");
-            return 1;
+        if (tpm_pin_get_user_status(uid, &cfg, &status)) {
+            if (!status.tpm_present) {
+                fprintf(stderr, "Error: TPM 2.0 device was not detected on this system.\n");
+                fprintf(stderr, "Cannot enroll a hardware-backed PIN without a functional TPM 2.0.\n");
+                return 1;
+            }
+            if (!status.tpm_accessible) {
+                fprintf(stderr, "Error: TPM 2.0 device is present, but permission was denied (/dev/tpmrm0).\n");
+                fprintf(stderr, "Run with sudo/pkexec, enable PAM integration (sudo tpm-pin-ctl pam enable), or add your user to the 'tss' group.\n");
+                return 1;
+            }
         }
 
         char *pin = NULL;
@@ -436,6 +450,12 @@ int main(int argc, char **argv) {
             }
 
             if (tpm_pin_config_save(NULL, &cfg)) {
+                if (strcasecmp(key, "enable_keyring_unlock") == 0 && pam_manager_is_enabled()) {
+                    linux_distro_t d = pam_manager_detect_distro();
+                    if (d == DISTRO_ARCH) {
+                        pam_manager_configure_arch_keyring_file("/etc/pam.d/system-local-login", cfg.enable_keyring_unlock);
+                    }
+                }
                 printf("Updated config: %s = %s\n", key, val);
                 return 0;
             } else {

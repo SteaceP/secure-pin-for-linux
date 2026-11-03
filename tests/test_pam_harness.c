@@ -268,6 +268,7 @@ static bool test_pam_module_dlopen(void) {
         "./pam_tpm_pin.so",
         "./build/pam_tpm_pin.so",
         "../build/pam_tpm_pin.so",
+        "/usr/lib/security/pam_tpm_pin.so",
         "/usr/lib/x86_64-linux-gnu/security/pam_tpm_pin.so"
     };
     void *handle = NULL;
@@ -298,6 +299,188 @@ static bool test_pam_module_dlopen(void) {
     return true;
 }
 
+static bool read_whole_file(const char *path, char *buf, size_t buf_sz) {
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+    size_t n = fread(buf, 1, buf_sz - 1, f);
+    buf[n] = '\0';
+    fclose(f);
+    return true;
+}
+
+static bool write_whole_file(const char *path, const char *content) {
+    FILE *f = fopen(path, "w");
+    if (!f) return false;
+    size_t len = strlen(content);
+    bool ok = (fwrite(content, 1, len, f) == len);
+    fclose(f);
+    return ok;
+}
+
+static bool test_arch_distro_and_pam_stack(void) {
+    char osrel_path[256];
+    char sysauth_path[256];
+    char local_login_path[256];
+    int pid = (int)getpid();
+
+    snprintf(osrel_path, sizeof(osrel_path), "/tmp/test_os_release_%d", pid);
+    snprintf(sysauth_path, sizeof(sysauth_path), "/tmp/test_system_auth_%d", pid);
+    snprintf(local_login_path, sizeof(local_login_path), "/tmp/test_system_local_login_%d", pid);
+
+    const char *arch_osrel =
+        "NAME=\"Arch Linux\"\n"
+        "PRETTY_NAME=\"Arch Linux\"\n"
+        "ID=customarch\n"
+        "ID_LIKE=arch\n"
+        "BUILD_ID=rolling\n";
+    if (!write_whole_file(osrel_path, arch_osrel)) return false;
+
+    linux_distro_t d = pam_manager_detect_distro_from_file(osrel_path);
+    unlink(osrel_path);
+    if (d != DISTRO_ARCH) return false;
+    if (strcmp(pam_manager_distro_name(d), "Arch Linux") != 0) return false;
+
+    /* Standard Arch pambase system-auth layout, plus a comment trap mentioning pam_unix.so */
+    const char *arch_system_auth =
+        "#%PAM-1.0\n"
+        "# Note: fallback to pam_unix.so happens below\n"
+        "\n"
+        "auth       required                    pam_faillock.so      preauth\n"
+        "-auth      [success=2 default=ignore]  pam_systemd_home.so\n"
+        "auth       [success=1 default=bad]     pam_unix.so          try_first_pass nullok\n"
+        "auth       [default=die]               pam_faillock.so      authfail\n"
+        "auth       optional                    pam_permit.so\n"
+        "auth       required                    pam_env.so\n"
+        "auth        requisite                   pam_faillock.so      authsucc\n"
+        "\n"
+        "account    required                    pam_unix.so\n"
+        "password   required                    pam_unix.so          try_first_pass nullok sha512 shadow\n"
+        "session    required                    pam_unix.so\n";
+
+    if (!write_whole_file(sysauth_path, arch_system_auth)) return false;
+
+    if (!pam_manager_apply_auth_file(sysauth_path)) {
+        unlink(sysauth_path);
+        return false;
+    }
+
+    /* Idempotency check */
+    if (!pam_manager_apply_auth_file(sysauth_path)) {
+        unlink(sysauth_path);
+        return false;
+    }
+
+    char updated[4096];
+    if (!read_whole_file(sysauth_path, updated, sizeof(updated))) {
+        unlink(sysauth_path);
+        return false;
+    }
+
+    /* Must use success=3 and sit strictly BEFORE pam_systemd_home.so (so success=2 jump stays intact) */
+    const char *pin_pos = strstr(updated, "auth\t[success=3 authinfo_unavail=ignore open_err=ignore default=ignore]\tpam_tpm_pin.so");
+    const char *home_pos = strstr(updated, "-auth      [success=2 default=ignore]  pam_systemd_home.so");
+    const char *comment_pos = strstr(updated, "# Note: fallback to pam_unix.so happens below");
+    if (!pin_pos || !home_pos || !comment_pos || !(comment_pos < pin_pos && pin_pos < home_pos)) {
+        unlink(sysauth_path);
+        return false;
+    }
+
+    /* Clean removal must restore exact original content */
+    if (!pam_manager_remove_from_file(sysauth_path)) {
+        unlink(sysauth_path);
+        return false;
+    }
+    if (!read_whole_file(sysauth_path, updated, sizeof(updated)) ||
+        strcmp(updated, arch_system_auth) != 0) {
+        unlink(sysauth_path);
+        return false;
+    }
+    unlink(sysauth_path);
+
+    /* Test Arch system-local-login keyring auto-unlock block */
+    const char *arch_local_login =
+        "#%PAM-1.0\n"
+        "\n"
+        "auth      include   system-login\n"
+        "account   include   system-login\n"
+        "password  include   system-login\n"
+        "session   include   system-login\n";
+
+    if (!write_whole_file(local_login_path, arch_local_login)) return false;
+
+    if (!pam_manager_configure_arch_keyring_file(local_login_path, true) ||
+        !pam_manager_configure_arch_keyring_file(local_login_path, true)) {
+        unlink(local_login_path);
+        return false;
+    }
+
+    if (!read_whole_file(local_login_path, updated, sizeof(updated)) ||
+        !strstr(updated, "-auth      optional   pam_gnome_keyring.so") ||
+        !strstr(updated, "-session   optional   pam_gnome_keyring.so auto_start") ||
+        !strstr(updated, "-session   optional   pam_kwallet5.so auto_start")) {
+        unlink(local_login_path);
+        return false;
+    }
+
+    if (!pam_manager_configure_arch_keyring_file(local_login_path, false) ||
+        !read_whole_file(local_login_path, updated, sizeof(updated)) ||
+        strcmp(updated, arch_local_login) != 0) {
+        unlink(local_login_path);
+        return false;
+    }
+
+    unlink(local_login_path);
+    return true;
+}
+
+static bool test_pam_service_allowlist(void) {
+    tpm_pin_config_t cfg;
+    tpm_pin_config_defaults(&cfg);
+
+    /* Remote / background services must NEVER be allowed */
+    if (tpm_pin_is_service_enabled("sshd", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("rlogin", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("system-remote-login", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("cockpit", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("crond", false, &cfg)) return false;
+
+    /* Display managers (greetd, SDDM, GDM, ly) follow enable_login */
+    cfg.enable_login = true;
+    cfg.enable_lockscreen = false;
+    if (!tpm_pin_is_service_enabled("greetd", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("sddm", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("gdm-password", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("ly", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("login", false, &cfg)) return false;
+
+    /* Unprivileged cosmic-greeter lock screen uses PAM service "login" with euid != 0 -> enable_lockscreen */
+    if (tpm_pin_is_service_enabled("login", true, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("kde", true, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("hyprlock", true, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("xfce4-screensaver", true, &cfg)) return false;
+
+    cfg.enable_login = false;
+    cfg.enable_lockscreen = true;
+    if (tpm_pin_is_service_enabled("greetd", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("login", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("login", true, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("cosmic-greeter", true, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("kde", true, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("hyprlock", true, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("polkit-1", false, &cfg)) return false;
+
+    /* Sudo / doas / su-l follow enable_sudo */
+    cfg.enable_sudo = true;
+    if (!tpm_pin_is_service_enabled("sudo", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("doas", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("su-l", false, &cfg)) return false;
+    cfg.enable_sudo = false;
+    if (tpm_pin_is_service_enabled("sudo", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("doas", false, &cfg)) return false;
+
+    return true;
+}
+
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -305,6 +488,8 @@ int main(int argc, char **argv) {
 
     RUN_TEST("PAM Module Dynamic Linking (dlopen)", test_pam_module_dlopen);
     RUN_TEST("PIN Policy Validation", test_policy_validation);
+    RUN_TEST("Arch PAM Stack & Keyring Management", test_arch_distro_and_pam_stack);
+    RUN_TEST("Desktop & PAM Service Allowlist", test_pam_service_allowlist);
     RUN_TEST("AES-256-GCM + PBKDF2 Crypto Roundtrip", test_crypto_roundtrip);
     RUN_TEST("Configuration Serialization", test_config_serialization);
     RUN_TEST("TPM 2.0 User Enrollment & Unsealing", test_tpm_enroll_and_verify);

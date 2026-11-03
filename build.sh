@@ -29,7 +29,7 @@ Options:
   --no-package        Build binaries only, skip packaging
   -t, --test          Run automated test suite before packaging
   -d, --debug         Build with Debug configuration (default: Release)
-  --arch              Build Arch Linux package (pkg.tar.zst) via Docker
+  --arch              Build Arch Linux package (.pkg.tar.zst) via makepkg or Docker
   --flatpak           Build Flatpak package (.flatpak) via flatpak-builder
   -j, --jobs <N>      Number of parallel compile jobs (default: nproc)
   --prefix <path>     Installation prefix for CMake (default: /usr)
@@ -146,16 +146,40 @@ if [ "$DO_PACKAGE" = true ]; then
         mv "${PACKAGES[@]}" "$DIST_DIR/"
     fi
 
-    if [ "$BUILD_ARCH" = true ]; then
-        if command -v docker >/dev/null 2>&1; then
+    HOST_IS_ARCH=false
+    if [ -f /etc/arch-release ] || grep -qiE '^ID(_LIKE)?=.*arch' /etc/os-release 2>/dev/null; then
+        HOST_IS_ARCH=true
+    fi
+
+    if [ "$BUILD_ARCH" = true ] || { [ "$HOST_IS_ARCH" = true ] && command -v makepkg >/dev/null 2>&1; }; then
+        VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+        [ -z "$VERSION" ] && VERSION="1.0.4"
+        if command -v makepkg >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
+            echo "Building Arch Linux package natively via makepkg..."
+            ARCH_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tpm-pin-makepkg.XXXXXX")
+            tar --exclude='.git' \
+                --exclude='./build*' \
+                --exclude='./dist' \
+                --exclude='./release-assets' \
+                --exclude='./flatpak-repo' \
+                --exclude='./.flatpak-builder' \
+                --exclude='*.pkg.tar*' \
+                --transform="s,^\.,tpm-pin-${VERSION}," \
+                -czf "$ARCH_TMP/tpm-pin-${VERSION}.tar.gz" -C "$ROOT_DIR" .
+            cp packaging/arch/PKGBUILD packaging/arch/tpm-pin.install "$ARCH_TMP/"
+            sed -i "s/^pkgver=.*/pkgver=${VERSION}/" "$ARCH_TMP/PKGBUILD"
+            (cd "$ARCH_TMP" && PKGEXT='.pkg.tar.zst' makepkg -f --noconfirm)
+            for pkgf in "$ARCH_TMP"/tpm-pin-"${VERSION}"-*.pkg.tar*; do
+                [ -f "$pkgf" ] && cp "$pkgf" "$DIST_DIR/"
+            done
+            rm -rf "$ARCH_TMP"
+        elif command -v docker >/dev/null 2>&1; then
             echo "Building Arch Linux package via Docker..."
-            VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-            [ -z "$VERSION" ] && VERSION="1.0.4"
             docker run --rm \
                 -v "$ROOT_DIR:/src:ro" \
                 -v "$DIST_DIR:/out" \
                 archlinux:latest bash -c "
-                  pacman -Sy --noconfirm base-devel cmake git openssl pam tpm2-tss python python-gobject libadwaita >/dev/null 2>&1
+                  pacman -Sy --noconfirm base-devel cmake git openssl pam polkit tpm2-tss python python-gobject gtk4 libadwaita >/dev/null 2>&1
                   useradd -m builder
                   echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
                   git config --global --add safe.directory '*'
@@ -170,7 +194,7 @@ if [ "$DO_PACKAGE" = true ]; then
                   cp /home/builder/pkg/*.pkg.tar.zst /out/
                 "
         else
-            echo "Docker not found, skipping Arch Linux package."
+            echo "Neither makepkg nor Docker found, skipping Arch Linux package."
         fi
     fi
 

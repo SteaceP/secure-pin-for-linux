@@ -7,6 +7,9 @@
 #include "tpm_pin.h"
 
 int main(int argc, char **argv) {
+    setenv("TSS2_LOG", "all+NONE", 1);
+    setenv("TSS2_LOGFILE", "/dev/null", 1);
+
     uid_t uid = getuid();
     if (argc >= 2) {
         struct passwd pwd_s;
@@ -32,8 +35,11 @@ int main(int argc, char **argv) {
     }
 
     size_t len = strlen(pin_buf);
-    if (len > 0 && pin_buf[len - 1] == '\n') {
-        pin_buf[len - 1] = '\0';
+    if (len > 0 && (pin_buf[len - 1] == '\n' || pin_buf[len - 1] == '\r')) {
+        pin_buf[--len] = '\0';
+    }
+    if (len > 0 && pin_buf[len - 1] == '\r') {
+        pin_buf[--len] = '\0';
     }
 
     int tpm_rc = 0;
@@ -41,5 +47,14 @@ int main(int argc, char **argv) {
 
     tpm_pin_zero(pin_buf, sizeof(pin_buf));
 
-    return ok ? 0 : 1;
+    if (ok) {
+        return 0;
+    }
+    if ((tpm_rc & 0xFFF) == (TPM2_RC_LOCKOUT & 0xFFF)) {
+        return 2;
+    }
+    if ((tpm_rc & 0xFFF) == (TPM2_RC_POLICY_FAIL & 0xFFF) || (tpm_rc & 0xBF) == 0x84) {
+        return 3;
+    }
+    return 1;
 }

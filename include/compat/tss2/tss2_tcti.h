@@ -48,6 +48,15 @@ struct TSS2_TCTI_CONTEXT_COMMON_V1 {
 
 typedef TSS2_TCTI_CONTEXT_COMMON_V1 TSS2_TCTI_CONTEXT;
 
+#ifndef Tss2_Tcti_Finalize
+#define Tss2_Tcti_Finalize(tctiContext) \
+    do { \
+        if ((tctiContext) != NULL && ((TSS2_TCTI_CONTEXT_COMMON_V1 *)(tctiContext))->finalize != NULL) { \
+            ((TSS2_TCTI_CONTEXT_COMMON_V1 *)(tctiContext))->finalize((TSS2_TCTI_CONTEXT_COMMON_V1 *)(tctiContext)); \
+        } \
+    } while (0)
+#endif
+
 TSS2_RC Tss2_Tcti_Device_Init(
     TSS2_TCTI_CONTEXT *tctiContext,
     size_t *size,

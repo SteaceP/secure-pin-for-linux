@@ -11,6 +11,7 @@ extern "C" {
 typedef uint32_t TSS2_RC;
 
 #define TSS2_RC_SUCCESS                  ((TSS2_RC)0)
+#define TSS2_BASE_RC_BAD_REFERENCE      ((TSS2_RC)0x0005)
 #define TSS2_BASE_RC_AUTH_FAIL          ((TSS2_RC)0x000E)
 #define TSS2_BASE_RC_LOCKOUT            ((TSS2_RC)0x0021)
 
@@ -18,8 +19,10 @@ typedef uint32_t TSS2_RC;
 #define TSS2_RC_LAYER_MASK              (0xFF << TSS2_RC_LEVEL_SHIFT)
 
 #define TSS2_TPM_RC_LAYER               (0 << TSS2_RC_LEVEL_SHIFT)
-#define TSS2_ESYS_RC_LAYER              (7 << TSS2_RC_LEVEL_SHIFT)
+#define TSS2_ESAPI_RC_LAYER             (7 << TSS2_RC_LEVEL_SHIFT)
+#define TSS2_ESYS_RC_LAYER              TSS2_ESAPI_RC_LAYER
 #define TSS2_TCTI_RC_LAYER              (10 << TSS2_RC_LEVEL_SHIFT)
+#define TSS2_ESYS_RC_BAD_REFERENCE      ((TSS2_RC)(TSS2_ESAPI_RC_LAYER | TSS2_BASE_RC_BAD_REFERENCE))
 
 #ifdef __cplusplus
 }

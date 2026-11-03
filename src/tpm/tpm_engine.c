@@ -3,7 +3,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include "tpm_pin.h"
+#include <tss2/tss2_tcti.h>
+#if defined(__has_include)
+#  if __has_include(<tss2/tss2_tcti_device.h>)
+#    include <tss2/tss2_tcti_device.h>
+#  endif
+#  if defined(HAVE_TCTI_SWTPM) && __has_include(<tss2/tss2_tcti_swtpm.h>)
+#    include <tss2/tss2_tcti_swtpm.h>
+#  endif
+#  if defined(HAVE_TCTI_MSSIM) && __has_include(<tss2/tss2_tcti_mssim.h>)
+#    include <tss2/tss2_tcti_mssim.h>
+#  endif
+#endif
 
 static TSS2_RC init_tcti(const char *tcti_conf, TSS2_TCTI_CONTEXT **out_tcti) {
     if (!out_tcti) return TSS2_TCTI_RC_LAYER;
@@ -86,7 +100,7 @@ static TSS2_RC init_tcti(const char *tcti_conf, TSS2_TCTI_CONTEXT **out_tcti) {
         }
         *out_tcti = ctx;
         return TSS2_RC_SUCCESS;
-    } else if (access("/dev/tpmrm0", R_OK | W_OK) == 0) {
+    } else if (faccessat(AT_FDCWD, "/dev/tpmrm0", R_OK | W_OK, AT_EACCESS) == 0) {
         size_t size = 0;
         TSS2_RC rc = Tss2_Tcti_Device_Init(NULL, &size, "/dev/tpmrm0");
         if (rc == TSS2_RC_SUCCESS) {
@@ -100,7 +114,7 @@ static TSS2_RC init_tcti(const char *tcti_conf, TSS2_TCTI_CONTEXT **out_tcti) {
                 free(ctx);
             }
         }
-    } else if (access("/dev/tpm0", R_OK | W_OK) == 0) {
+    } else if (faccessat(AT_FDCWD, "/dev/tpm0", R_OK | W_OK, AT_EACCESS) == 0) {
         size_t size = 0;
         TSS2_RC rc = Tss2_Tcti_Device_Init(NULL, &size, "/dev/tpm0");
         if (rc == TSS2_RC_SUCCESS) {
@@ -116,27 +130,31 @@ static TSS2_RC init_tcti(const char *tcti_conf, TSS2_TCTI_CONTEXT **out_tcti) {
         }
     }
 
-    return TSS2_RC_SUCCESS; /* Let Esys_Initialize try its default if any */
+    /* Do not pass NULL TCTI to Esys_Initialize, preventing tctildr from probing localhost TCP sockets */
+    return TSS2_TCTI_RC_LAYER;
 }
 
 TSS2_RC tpm_engine_init(const char *tcti_conf, ESYS_CONTEXT **esys_ctx) {
-    if (!esys_ctx) return TSS2_ESYS_RC_LAYER;
+    if (!esys_ctx) return TSS2_ESYS_RC_BAD_REFERENCE;
     *esys_ctx = NULL;
+
+    /* Silence noisy default libtss2 stderr logs unless explicitly configured by caller */
+    setenv("TSS2_LOG", "all+NONE", 0);
 
     TSS2_TCTI_CONTEXT *tcti = NULL;
     TSS2_RC rc = init_tcti(tcti_conf, &tcti);
-    if (rc != TSS2_RC_SUCCESS) {
+    if (rc != TSS2_RC_SUCCESS || !tcti) {
         if (tcti) {
-            if (tcti->finalize) tcti->finalize(tcti);
+            Tss2_Tcti_Finalize(tcti);
             free(tcti);
         }
-        return rc;
+        return (rc != TSS2_RC_SUCCESS) ? rc : TSS2_TCTI_RC_LAYER;
     }
 
     rc = Esys_Initialize(esys_ctx, tcti, NULL);
     if (rc != TSS2_RC_SUCCESS) {
         if (tcti) {
-            if (tcti->finalize) tcti->finalize(tcti);
+            Tss2_Tcti_Finalize(tcti);
             free(tcti);
         }
         return rc;
@@ -152,9 +170,7 @@ void tpm_engine_destroy(ESYS_CONTEXT **esys_ctx) {
         Esys_Finalize(esys_ctx);
         *esys_ctx = NULL;
         if (tcti) {
-            if (tcti->finalize) {
-                tcti->finalize(tcti);
-            }
+            Tss2_Tcti_Finalize(tcti);
             free(tcti);
         }
     }
@@ -163,7 +179,7 @@ void tpm_engine_destroy(ESYS_CONTEXT **esys_ctx) {
 static void fill_pcr7_selection(TPML_PCR_SELECTION *pcrSel) {
     memset(pcrSel, 0, sizeof(*pcrSel));
     pcrSel->count = 1;
-    pcrSel->pcrSelections[0].hashAlg = TPM2_ALG_SHA256;
+    pcrSel->pcrSelections[0].hash = TPM2_ALG_SHA256;
     pcrSel->pcrSelections[0].sizeofSelect = 3;
     pcrSel->pcrSelections[0].pcrSelect[0] = (1 << 7); /* PCR 7 */
 }
@@ -187,7 +203,7 @@ static TSS2_RC create_primary_storage_key(ESYS_CONTEXT *ctx, ESYS_TR *primaryHan
         TPMA_OBJECT_USERWITHAUTH;
     inPublic.publicArea.parameters.eccDetail.symmetric.algorithm = TPM2_ALG_AES;
     inPublic.publicArea.parameters.eccDetail.symmetric.keyBits.aes = 128;
-    inPublic.publicArea.parameters.eccDetail.symmetric.mode = TPM2_ALG_CFB;
+    inPublic.publicArea.parameters.eccDetail.symmetric.mode.aes = TPM2_ALG_CFB;
     inPublic.publicArea.parameters.eccDetail.scheme.scheme = TPM2_ALG_NULL;
     inPublic.publicArea.parameters.eccDetail.curveID = 0x0003; /* NIST P-256 */
     inPublic.publicArea.parameters.eccDetail.kdf.scheme = TPM2_ALG_NULL;
@@ -226,7 +242,7 @@ static TSS2_RC create_primary_storage_key(ESYS_CONTEXT *ctx, ESYS_TR *primaryHan
         TPMA_OBJECT_USERWITHAUTH;
     inPublic.publicArea.parameters.rsaDetail.symmetric.algorithm = TPM2_ALG_AES;
     inPublic.publicArea.parameters.rsaDetail.symmetric.keyBits.aes = 128;
-    inPublic.publicArea.parameters.rsaDetail.symmetric.mode = TPM2_ALG_CFB;
+    inPublic.publicArea.parameters.rsaDetail.symmetric.mode.aes = TPM2_ALG_CFB;
     inPublic.publicArea.parameters.rsaDetail.scheme.scheme = TPM2_ALG_NULL;
     inPublic.publicArea.parameters.rsaDetail.keyBits = 2048;
 
@@ -250,7 +266,7 @@ TSS2_RC tpm_engine_seal_key(ESYS_CONTEXT *ctx,
                            bool bind_pcr7,
                            const uint8_t *master_key, size_t key_len,
                            TPM2B_PRIVATE *out_priv, TPM2B_PUBLIC *out_pub) {
-    if (!ctx || !auth || !master_key || !out_priv || !out_pub) return TSS2_ESYS_RC_LAYER;
+    if (!ctx || !auth || !master_key || !out_priv || !out_pub) return TSS2_ESYS_RC_BAD_REFERENCE;
 
     ESYS_TR primaryHandle = ESYS_TR_NONE;
     TSS2_RC rc = create_primary_storage_key(ctx, &primaryHandle);
@@ -261,7 +277,7 @@ TSS2_RC tpm_engine_seal_key(ESYS_CONTEXT *ctx,
     if (auth_len > sizeof(inSensitive.sensitive.userAuth.buffer) ||
         key_len > sizeof(inSensitive.sensitive.data.buffer)) {
         Esys_FlushContext(ctx, primaryHandle);
-        return TSS2_ESYS_RC_LAYER;
+        return TSS2_ESYS_RC_BAD_REFERENCE;
     }
     inSensitive.sensitive.userAuth.size = (UINT16)auth_len;
     memcpy(inSensitive.sensitive.userAuth.buffer, auth, auth_len);
@@ -321,7 +337,7 @@ TSS2_RC tpm_engine_seal_key(ESYS_CONTEXT *ctx,
             Esys_FlushContext(ctx, trialSession);
             tpm_pin_zero(&inSensitive, sizeof(inSensitive));
             Esys_FlushContext(ctx, primaryHandle);
-            return (rc != TSS2_RC_SUCCESS) ? rc : TSS2_ESYS_RC_LAYER;
+            return (rc != TSS2_RC_SUCCESS) ? rc : TSS2_ESYS_RC_BAD_REFERENCE;
         }
 
         inPublic.publicArea.authPolicy = *policyDigest;
@@ -345,7 +361,7 @@ TSS2_RC tpm_engine_seal_key(ESYS_CONTEXT *ctx,
     memset(&sym_aes, 0, sizeof(sym_aes));
     sym_aes.algorithm = TPM2_ALG_AES;
     sym_aes.keyBits.aes = 128;
-    sym_aes.mode = TPM2_ALG_CFB;
+    sym_aes.mode.aes = TPM2_ALG_CFB;
 
     TSS2_RC s_rc = Esys_StartAuthSession(
         ctx, primaryHandle, ESYS_TR_NONE,
@@ -398,7 +414,7 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
                              bool bind_pcr7,
                              const TPM2B_PRIVATE *in_priv, const TPM2B_PUBLIC *in_pub,
                              uint8_t *out_key, size_t *out_key_len) {
-    if (!ctx || !auth || !in_priv || !in_pub || !out_key || !out_key_len) return TSS2_ESYS_RC_LAYER;
+    if (!ctx || !auth || !in_priv || !in_pub || !out_key || !out_key_len) return TSS2_ESYS_RC_BAD_REFERENCE;
 
     ESYS_TR primaryHandle = ESYS_TR_NONE;
     TSS2_RC rc = create_primary_storage_key(ctx, &primaryHandle);
@@ -426,7 +442,7 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
     if (auth_len > sizeof(authVal.buffer)) {
         Esys_FlushContext(ctx, itemHandle);
         Esys_FlushContext(ctx, primaryHandle);
-        return TSS2_ESYS_RC_LAYER;
+        return TSS2_ESYS_RC_BAD_REFERENCE;
     }
     authVal.size = (UINT16)auth_len;
     memcpy(authVal.buffer, auth, auth_len);
@@ -440,7 +456,7 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
         memset(&sym_aes, 0, sizeof(sym_aes));
         sym_aes.algorithm = TPM2_ALG_AES;
         sym_aes.keyBits.aes = 128;
-        sym_aes.mode = TPM2_ALG_CFB;
+        sym_aes.mode.aes = TPM2_ALG_CFB;
 
         rc = Esys_StartAuthSession(
             ctx, primaryHandle, ESYS_TR_NONE,
@@ -489,7 +505,7 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
         memset(&sym_aes, 0, sizeof(sym_aes));
         sym_aes.algorithm = TPM2_ALG_AES;
         sym_aes.keyBits.aes = 128;
-        sym_aes.mode = TPM2_ALG_CFB;
+        sym_aes.mode.aes = TPM2_ALG_CFB;
 
         TSS2_RC s_rc = Esys_StartAuthSession(
             ctx, primaryHandle, ESYS_TR_NONE,
@@ -537,7 +553,7 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
 
 TSS2_RC tpm_engine_configure_da(ESYS_CONTEXT *ctx,
                                uint32_t max_tries, uint32_t recovery_time, uint32_t lockout_recovery) {
-    if (!ctx) return TSS2_ESYS_RC_LAYER;
+    if (!ctx) return TSS2_ESYS_RC_BAD_REFERENCE;
     return Esys_DictionaryAttackParameters(
         ctx,
         ESYS_TR_RH_LOCKOUT,
@@ -551,7 +567,7 @@ TSS2_RC tpm_engine_configure_da(ESYS_CONTEXT *ctx,
 }
 
 TSS2_RC tpm_engine_reset_da_lockout(ESYS_CONTEXT *ctx) {
-    if (!ctx) return TSS2_ESYS_RC_LAYER;
+    if (!ctx) return TSS2_ESYS_RC_BAD_REFERENCE;
     return Esys_DictionaryAttackLockReset(
         ctx,
         ESYS_TR_RH_LOCKOUT,
@@ -561,8 +577,102 @@ TSS2_RC tpm_engine_reset_da_lockout(ESYS_CONTEXT *ctx) {
     );
 }
 
+bool tpm_engine_sysfs_present(void) {
+    FILE *f_ver = fopen("/sys/class/tpm/tpm0/tpm_version_major", "r");
+    if (f_ver) {
+        char buf[16] = {0};
+        bool is_v2 = (fgets(buf, sizeof(buf), f_ver) != NULL && atoi(buf) == 2);
+        fclose(f_ver);
+        if (is_v2) return true;
+    }
+    struct stat st;
+    if (stat("/dev/tpmrm0", &st) == 0 && S_ISCHR(st.st_mode)) {
+        return true;
+    }
+    return false;
+}
+
+void tpm_engine_detect_sysfs_hardware(const char *mfg, const char *vendor_str, tpm_pin_status_t *status) {
+    if (!status) return;
+
+    const char *safe_mfg = mfg ? mfg : "";
+    const char *safe_vendor = vendor_str ? vendor_str : "";
+
+    if (strcmp(safe_mfg, "IBM") == 0 || strstr(safe_vendor, "SW TPM") || strstr(safe_vendor, "SW   TPM")) {
+        snprintf(status->hardware_type, sizeof(status->hardware_type),
+                 "Software TPM 2.0 Emulator (swtpm)");
+        return;
+    }
+
+    /* Architecture Detection: Microsoft Pluton vs AMD PSP vs Intel PTT vs dTPM */
+    bool is_pluton = false;
+    bool is_amd = false;
+    bool is_intel = false;
+    bool is_crb = false;
+
+    FILE *f_hid = fopen("/sys/class/tpm/tpm0/device/firmware_node/hid", "r");
+    char hid[64] = {0};
+    if (f_hid) {
+        if (fgets(hid, sizeof(hid), f_hid)) {
+            char *nl = strchr(hid, '\n');
+            if (nl) *nl = '\0';
+        }
+        fclose(f_hid);
+    }
+
+    char driver_link[256] = {0};
+    ssize_t rlen = readlink("/sys/class/tpm/tpm0/device/driver", driver_link, sizeof(driver_link) - 1);
+    if (rlen > 0) {
+        driver_link[rlen] = '\0';
+        if (strstr(driver_link, "crb")) is_crb = true;
+    }
+
+    char cpu_model[128] = {0};
+    FILE *f_cpu = fopen("/proc/cpuinfo", "r");
+    if (f_cpu) {
+        char line[256];
+        while (fgets(line, sizeof(line), f_cpu)) {
+            if (strncmp(line, "model name", 10) == 0) {
+                char *colon = strchr(line, ':');
+                if (colon) {
+                    snprintf(cpu_model, sizeof(cpu_model), "%s", colon + 2);
+                    char *nl = strchr(cpu_model, '\n');
+                    if (nl) *nl = '\0';
+                }
+                break;
+            }
+        }
+        fclose(f_cpu);
+    }
+
+    if (strcmp(hid, "MSFT0200") == 0 || strstr(safe_vendor, "Pluton") || strstr(safe_vendor, "PLUTON")) {
+        is_pluton = true;
+    } else if (strcmp(safe_mfg, "AMD") == 0 || ((is_crb || strcmp(hid, "MSFT0101") == 0) && strstr(cpu_model, "AMD"))) {
+        is_amd = true;
+    } else if (strcmp(safe_mfg, "INTC") == 0 || ((is_crb || strcmp(hid, "MSFT0101") == 0) && strstr(cpu_model, "Intel"))) {
+        is_intel = true;
+    }
+
+    if (is_pluton) {
+        snprintf(status->hardware_type, sizeof(status->hardware_type),
+                 "Microsoft Pluton (Silicon-Integrated Security Processor)");
+    } else if (is_amd) {
+        snprintf(status->hardware_type, sizeof(status->hardware_type),
+                 "AMD Platform Security Processor (PSP fTPM 2.0)");
+    } else if (is_intel) {
+        snprintf(status->hardware_type, sizeof(status->hardware_type),
+                 "Intel Platform Trust Technology (PTT fTPM 2.0)");
+    } else if (is_crb) {
+        snprintf(status->hardware_type, sizeof(status->hardware_type),
+                 "Firmware TPM 2.0 (On-Die CRB)");
+    } else {
+        snprintf(status->hardware_type, sizeof(status->hardware_type),
+                 "Discrete Hardware TPM (dTPM 2.0 Chip)");
+    }
+}
+
 TSS2_RC tpm_engine_get_status(ESYS_CONTEXT *ctx, tpm_pin_status_t *status) {
-    if (!ctx || !status) return TSS2_ESYS_RC_LAYER;
+    if (!ctx || !status) return TSS2_ESYS_RC_BAD_REFERENCE;
 
     char mfg[32] = {0};
     char vendor_str[64] = {0};
@@ -582,10 +692,12 @@ TSS2_RC tpm_engine_get_status(ESYS_CONTEXT *ctx, tpm_pin_status_t *status) {
 
     if (rc != TSS2_RC_SUCCESS) {
         status->tpm_present = false;
+        status->tpm_accessible = false;
         return rc;
     }
 
     status->tpm_present = true;
+    status->tpm_accessible = true;
 
     if (capData) {
         UINT32 count = capData->data.tpmProperties.count;
@@ -661,71 +773,7 @@ TSS2_RC tpm_engine_get_status(ESYS_CONTEXT *ctx, tpm_pin_status_t *status) {
         Esys_Free(varCap);
     }
 
-    /* Architecture Detection: Microsoft Pluton vs AMD PSP vs Intel PTT vs dTPM */
-    bool is_pluton = false;
-    bool is_amd = false;
-    bool is_intel = false;
-    bool is_crb = false;
-
-    FILE *f_hid = fopen("/sys/class/tpm/tpm0/device/firmware_node/hid", "r");
-    char hid[64] = {0};
-    if (f_hid) {
-        if (fgets(hid, sizeof(hid), f_hid)) {
-            char *nl = strchr(hid, '\n');
-            if (nl) *nl = '\0';
-        }
-        fclose(f_hid);
-    }
-
-    char driver_link[256] = {0};
-    ssize_t rlen = readlink("/sys/class/tpm/tpm0/device/driver", driver_link, sizeof(driver_link) - 1);
-    if (rlen > 0) {
-        driver_link[rlen] = '\0';
-        if (strstr(driver_link, "crb")) is_crb = true;
-    }
-
-    char cpu_model[128] = {0};
-    FILE *f_cpu = fopen("/proc/cpuinfo", "r");
-    if (f_cpu) {
-        char line[256];
-        while (fgets(line, sizeof(line), f_cpu)) {
-            if (strncmp(line, "model name", 10) == 0) {
-                char *colon = strchr(line, ':');
-                if (colon) {
-                    snprintf(cpu_model, sizeof(cpu_model), "%s", colon + 2);
-                    char *nl = strchr(cpu_model, '\n');
-                    if (nl) *nl = '\0';
-                }
-                break;
-            }
-        }
-        fclose(f_cpu);
-    }
-
-    if (strcmp(hid, "MSFT0200") == 0 || strstr(vendor_str, "Pluton") || strstr(vendor_str, "PLUTON")) {
-        is_pluton = true;
-    } else if (strcmp(mfg, "AMD") == 0 || (is_crb && strstr(cpu_model, "AMD"))) {
-        is_amd = true;
-    } else if (strcmp(mfg, "INTC") == 0 || (is_crb && strstr(cpu_model, "Intel"))) {
-        is_intel = true;
-    }
-
-    if (is_pluton) {
-        snprintf(status->hardware_type, sizeof(status->hardware_type),
-                 "Microsoft Pluton (Silicon-Integrated Security Processor)");
-    } else if (is_amd) {
-        snprintf(status->hardware_type, sizeof(status->hardware_type),
-                 "AMD Platform Security Processor (PSP fTPM 2.0)");
-    } else if (is_intel) {
-        snprintf(status->hardware_type, sizeof(status->hardware_type),
-                 "Intel Platform Trust Technology (PTT fTPM 2.0)");
-    } else if (is_crb) {
-        snprintf(status->hardware_type, sizeof(status->hardware_type),
-                 "Firmware TPM 2.0 (On-Die CRB)");
-    } else {
-        snprintf(status->hardware_type, sizeof(status->hardware_type),
-                 "Discrete Hardware TPM (dTPM 2.0 Chip)");
-    }
+    tpm_engine_detect_sysfs_hardware(mfg, vendor_str, status);
 
     snprintf(status->bus_encryption, sizeof(status->bus_encryption),
              "Active (AES-128-CFB parameter transit encryption)");

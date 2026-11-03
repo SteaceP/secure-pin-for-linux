@@ -47,7 +47,7 @@ bool tpm_pin_user_is_enrolled(uid_t uid, const tpm_pin_config_t *cfg) {
     if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
         return false;
     }
-    return (access(path, R_OK) == 0);
+    return (faccessat(AT_FDCWD, path, R_OK, AT_EACCESS) == 0);
 }
 
 bool tpm_pin_remove_user(uid_t uid, const tpm_pin_config_t *cfg) {
@@ -178,6 +178,7 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
     char dir_path[512];
     get_user_dir_path(uid, cfg, dir_path, sizeof(dir_path));
     mkdir(base_dir, 0755);
+    chmod(base_dir, 0755);
     mkdir(dir_path, 0700);
 
     char blob_path[512];
@@ -240,7 +241,7 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
     free(ciphertext);
 
     chmod(tmp_path, 0600);
-    if (getuid() == 0 && uid != 0) {
+    if (geteuid() == 0 && uid != 0) {
         if (chown(dir_path, uid, (gid_t)-1) != 0 || chown(tmp_path, uid, (gid_t)-1) != 0) {
             unlink(tmp_path);
             return false;
@@ -250,7 +251,7 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
         unlink(tmp_path);
         return false;
     }
-    if (getuid() == 0 && uid != 0) {
+    if (geteuid() == 0 && uid != 0) {
         if (chown(blob_path, uid, (gid_t)-1) != 0) {
             unlink(blob_path);
             return false;
@@ -425,6 +426,13 @@ bool tpm_pin_get_user_status(uid_t uid, const tpm_pin_config_t *cfg, tpm_pin_sta
     if (rc == TSS2_RC_SUCCESS && esys) {
         tpm_engine_get_status(esys, status);
         tpm_engine_destroy(&esys);
+    } else if (cfg->tcti_name[0] == '\0' && secure_getenv("TCTI") == NULL && tpm_engine_sysfs_present()) {
+        status->tpm_present = true;
+        status->tpm_accessible = false;
+        snprintf(status->manufacturer, sizeof(status->manufacturer), "TPM 2.0");
+        tpm_engine_detect_sysfs_hardware("", "", status);
+        snprintf(status->bus_encryption, sizeof(status->bus_encryption),
+                 "Active (AES-128-CFB parameter transit encryption)");
     }
 
     return true;

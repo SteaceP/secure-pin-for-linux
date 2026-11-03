@@ -17,9 +17,9 @@ It integrates with **PAM** (login screen, lock screen, `sudo`, and Polkit), auto
   - Hardware **Dictionary Attack (DA) protection**: TPM rate-limits and hardware-locks attempts on repeated incorrect PIN entries.
   - Optional **PCR 7 binding**: Pin validity bound to UEFI Secure Boot firmware and bootloader integrity.
 - **Unified Authentication Experience**:
-  - Unified `"PIN or Password: "` prompt across `sudo`, GDM/SDDM login screen, and screen locker.
+  - Unified `"PIN or Password: "` prompt across `sudo`/`doas`, GDM / SDDM / COSMIC (`greetd`) / LightDM / `ly` login screens, screen lockers (`kscreenlocker`, `cosmic-greeter`, `hyprlock`, `swaylock`, `*-screensaver`), and Polkit (`pkexec` / `run0`).
   - Intelligent fallback: typing your standard system password does not waste TPM DA attempts and seamlessly authenticates via standard PAM (`pam_unix.so try_first_pass`) without asking twice.
-  - **Desktop Keyring Auto-Unlock**: Sealing your login password in the TPM enables automatic GNOME Keyring / KWallet unlocking on boot login.
+  - **Desktop Keyring Auto-Unlock**: Sealing your login password in the TPM enables automatic GNOME Keyring / COSMIC / KWallet unlocking on boot login.
 - **Native GTK4 / Libadwaita Settings App**:
   - Matches the GNOME Settings look and feel (`AdwPreferencesWindow`).
   - Configure PIN enrollment, change/remove PIN, per-service toggles (`sudo`, login screen, lock screen, keyring auto-unlock), PIN complexity policies (digits-only vs. alphanumeric, min/max length), and reset TPM lockout counters.
@@ -27,7 +27,7 @@ It integrates with **PAM** (login screen, lock screen, `sudo`, and Polkit), auto
 - **Cross-Distribution & Packaging Support**:
   - Debian / Ubuntu (`.deb`, `pam-auth-update` profile).
   - Fedora / RHEL / CentOS (`.rpm`, `system-auth` / `password-auth`).
-  - Arch Linux (`PKGBUILD`).
+  - Arch Linux (`PKGBUILD` with `x86_64`, `x86_64_v3`, `x86_64_v4`, and `aarch64` targets).
   - Flatpak bundle (`io.github.securepin.Settings`) for sandboxed desktop environments.
   - Universal CMake build system.
 
@@ -52,8 +52,17 @@ It integrates with **PAM** (login screen, lock screen, `sudo`, and Polkit), auto
 - **Arch Linux**:
 
   ```bash
-  sudo pacman -S cmake gcc pkgconf openssl pam tpm2-tss python python-gobject libadwaita swtpm
+  sudo pacman -S --needed base-devel cmake gcc pkgconf openssl pam polkit tpm2-tss python python-gobject gtk4 libadwaita swtpm
   ```
+
+  To build and install a native Arch package (`.pkg.tar.zst`) directly:
+
+  ```bash
+  ./build.sh
+  sudo pacman -U dist/tpm-pin-*.pkg.tar.zst
+  ```
+
+  *(Optional: install `gnome-keyring` on GNOME/COSMIC or `kwallet-pam` on KDE Plasma for automatic login keyring unlocking).*
 
 - **TPM 2.0 User Permissions (`tss` group)**:
 

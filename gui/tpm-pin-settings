@@ -22,7 +22,8 @@ APP_ID = "io.github.securepin.Settings"
 
 class TpmPinSettingsApp(Adw.Application):
     def __init__(self):
-        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.FLAGS_NONE)
+        app_flags = getattr(Gio.ApplicationFlags, "DEFAULT_FLAGS", Gio.ApplicationFlags.FLAGS_NONE)
+        super().__init__(application_id=APP_ID, flags=app_flags)
 
     def do_activate(self):
         win = self.props.active_window
@@ -105,6 +106,7 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
 
             return {
                 "tpm_present": False,
+                "tpm_accessible": False,
                 "tpm_manufacturer": "Host service missing" if not host_installed else "TPM 2.0 (Not detected)",
                 "host_installed": host_installed,
                 "is_enrolled": False,
@@ -117,6 +119,7 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
                 "max_length": 32,
                 "da_max_tries": 5,
                 "da_recovery_time": 600,
+                "bind_pcr7": False,
                 "enable_login": True,
                 "enable_lockscreen": True,
                 "enable_sudo": True,
@@ -178,7 +181,7 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
 
         self.sw_login = Adw.SwitchRow()
         self.sw_login.set_title("Login Screen")
-        self.sw_login.set_subtitle("Unlock user session at boot (GDM / SDDM)")
+        self.sw_login.set_subtitle("Unlock user session at boot (GDM / SDDM / greetd / LightDM)")
         self.sw_login.connect("notify::active", lambda s, p: self.on_config_toggle(s, "enable_login"))
         grp_scopes.add(self.sw_login)
 
@@ -191,13 +194,13 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
 
         self.sw_sudo = Adw.SwitchRow()
         self.sw_sudo.set_title("Terminal Sudo")
-        self.sw_sudo.set_subtitle("Authorize sudo commands in terminal")
+        self.sw_sudo.set_subtitle("Authorize sudo / doas commands in terminal")
         self.sw_sudo.connect("notify::active", lambda s, p: self.on_config_toggle(s, "enable_sudo"))
         grp_scopes.add(self.sw_sudo)
 
         self.sw_keyring = Adw.SwitchRow()
         self.sw_keyring.set_title("Auto-Unlock Desktop Keyring")
-        self.sw_keyring.set_subtitle("Automatically unlock GNOME Keyring / KWallet on login")
+        self.sw_keyring.set_subtitle("Automatically unlock GNOME Keyring / COSMIC / KWallet on login")
         self.sw_keyring.connect("notify::active", lambda s, p: self.on_config_toggle(s, "enable_keyring_unlock"))
         grp_scopes.add(self.sw_keyring)
 
@@ -272,6 +275,7 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
             self.state = self.load_status()
 
             tpm_ok = self.state.get("tpm_present", False)
+            tpm_accessible = self.state.get("tpm_accessible", tpm_ok)
             mfg = self.state.get("tpm_manufacturer", "TPM 2.0")
             hw_type = self.state.get("hardware_type", "Standard TPM 2.0")
             bus_enc = self.state.get("bus_encryption", "Active (AES-128-CFB)")
@@ -285,11 +289,19 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
                 self.row_tpm.set_subtitle("TPM 2.0 not detected — PIN enrollment disabled")
                 self.row_hw.set_subtitle(hw_type)
                 self.row_bus.set_subtitle("Inactive (No TPM device)")
+            elif not tpm_accessible:
+                self.btn_enroll.set_sensitive(True)
+                self.row_tpm.set_subtitle(f"{mfg} — Hardware detected (enable PAM in settings for non-root status)")
+                self.row_hw.set_subtitle(hw_type)
+                self.row_bus.set_subtitle(bus_enc)
             else:
                 self.btn_enroll.set_sensitive(True)
                 self.row_tpm.set_subtitle(f"{mfg} — Hardware security active")
                 self.row_hw.set_subtitle(hw_type)
                 self.row_bus.set_subtitle(bus_enc)
+
+            distro = self.state.get("distro", "Linux")
+            self.sw_pam.set_subtitle(f"Detected system: {distro} — Requires administrative authorization (pkexec)")
 
             enrolled = self.state.get("is_enrolled", False)
             if enrolled:
@@ -339,6 +351,11 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
         ok, msg = self.run_ctl(["config", "set", key, "true" if value else "false"], need_root=True)
         if ok:
             self.state[key] = value
+            if self.state.get("is_enrolled", False):
+                if key == "bind_pcr7":
+                    self.add_toast(Adw.Toast.new("Click 'Change PIN' to re-seal your PIN with the updated PCR 7 setting."))
+                elif key == "enable_keyring_unlock" and value and not self.state.get("keyring_pwd_saved", False):
+                    self.add_toast(Adw.Toast.new("Click 'Change PIN' to seal your login password for keyring auto-unlock."))
         else:
             self._updating_ui = True
             switch.set_active(not value)
@@ -448,6 +465,7 @@ class EnrollPinDialog(Adw.PreferencesWindow):
 
         self.row_confirm = Adw.PasswordEntryRow()
         self.row_confirm.set_title("Confirm PIN")
+        self.row_confirm.connect("entry-activated", self.on_save)
         grp.add(self.row_confirm)
 
         page.add(grp)

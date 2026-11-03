@@ -25,7 +25,7 @@ typedef struct {
     union {
         UINT16 aes;
     } keyBits;
-    TPMI_ALG_SYM_MODE mode;
+    TPMU_SYM_MODE mode;
 } TPMT_SYM_DEF;
 
 typedef struct {
@@ -36,12 +36,14 @@ typedef struct {
     } sensitive;
 } TPM2B_SENSITIVE_CREATE;
 
-typedef struct {
+#ifndef TSS2_COMMON_H
+typedef struct TSS2_ABI_VERSION {
     uint32_t tssCreator;
     uint32_t tssFamily;
     uint32_t tssLevel;
     uint32_t tssVersion;
 } TSS2_ABI_VERSION;
+#endif
 
 TSS2_RC Esys_Initialize(
     ESYS_CONTEXT **esys_context,

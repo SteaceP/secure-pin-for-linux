@@ -6,7 +6,11 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+#if defined(__has_include) && __has_include(<tss2/tss2_common.h>)
+#include <tss2/tss2_common.h>
+#else
 #include <tss2/tss2_types.h>
+#endif
 #include <tss2/tss2_tpm2_types.h>
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_rc.h>
@@ -49,6 +53,7 @@ typedef struct {
 
 typedef struct {
     bool     tpm_present;
+    bool     tpm_accessible;
     char     manufacturer[64];
     char     hardware_type[128];
     char     bus_encryption[64];
@@ -84,6 +89,7 @@ typedef enum {
 /* Policy Functions */
 bool tpm_pin_validate_pin(const char *pin, const tpm_pin_config_t *cfg, char *err_buf, size_t err_size);
 bool tpm_pin_is_likely_pin(const char *input, const tpm_pin_config_t *cfg);
+bool tpm_pin_is_service_enabled(const char *service, bool unprivileged_caller, const tpm_pin_config_t *cfg);
 
 /* Crypto Functions */
 void tpm_pin_zero(void *ptr, size_t size);
@@ -105,6 +111,8 @@ bool tpm_pin_config_save(const char *path, const tpm_pin_config_t *cfg);
 TSS2_RC tpm_engine_init(const char *tcti_conf, ESYS_CONTEXT **esys_ctx);
 void    tpm_engine_destroy(ESYS_CONTEXT **esys_ctx);
 TSS2_RC tpm_engine_get_status(ESYS_CONTEXT *ctx, tpm_pin_status_t *status);
+bool    tpm_engine_sysfs_present(void);
+void    tpm_engine_detect_sysfs_hardware(const char *mfg, const char *vendor_str, tpm_pin_status_t *status);
 TSS2_RC tpm_engine_seal_key(ESYS_CONTEXT *ctx,
                            const uint8_t *auth, size_t auth_len,
                            bool bind_pcr7,
@@ -130,10 +138,14 @@ bool tpm_pin_get_user_status(uid_t uid, const tpm_pin_config_t *cfg, tpm_pin_sta
 
 /* Distro PAM Configuration Manager */
 linux_distro_t pam_manager_detect_distro(void);
+linux_distro_t pam_manager_detect_distro_from_file(const char *os_release_path);
 const char    *pam_manager_distro_name(linux_distro_t distro);
 bool           pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_len);
 bool           pam_manager_disable(char *err_buf, size_t err_len);
 bool           pam_manager_is_enabled(void);
+bool           pam_manager_apply_auth_file(const char *filepath);
+bool           pam_manager_remove_from_file(const char *filepath);
+bool           pam_manager_configure_arch_keyring_file(const char *filepath, bool enable);
 
 #ifdef __cplusplus
 }

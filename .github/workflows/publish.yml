@@ -174,7 +174,7 @@ jobs:
             -v "${{ github.workspace }}:/src:ro" \
             -v "${{ github.workspace }}/dist:/out" \
             archlinux:latest bash -c "
-              pacman -Sy --noconfirm base-devel cmake git openssl pam tpm2-tss python python-gobject libadwaita >/dev/null
+              pacman -Sy --noconfirm base-devel cmake git openssl pam polkit tpm2-tss python python-gobject gtk4 libadwaita >/dev/null
               useradd -m builder
               echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
               git config --global --add safe.directory '*'

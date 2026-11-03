@@ -6,14 +6,45 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+option(BUILD_GUI_ONLY "Build only the GUI application and desktop integration assets (e.g. for Flatpak)" OFF)
+option(INSTALL_PAM_CONFIGS "Install pam-auth-update profile (Debian/Ubuntu)" ON)
+
+if(NOT BUILD_GUI_ONLY AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "System installation prefix" FORCE)
+endif()
+
+if(NOT DEFINED CMAKE_INSTALL_LIBEXECDIR AND (EXISTS "/etc/arch-release" OR EXISTS "/etc/os-release"))
+    set(_IS_ARCH_LIKE FALSE)
+    if(EXISTS "/etc/arch-release")
+        set(_IS_ARCH_LIKE TRUE)
+    elseif(EXISTS "/etc/os-release")
+        file(READ "/etc/os-release" _OS_RELEASE_CONTENT)
+        if(_OS_RELEASE_CONTENT MATCHES "ID=\"?arch\"?" OR _OS_RELEASE_CONTENT MATCHES "ID_LIKE=.*arch")
+            set(_IS_ARCH_LIKE TRUE)
+        endif()
+    endif()
+    if(_IS_ARCH_LIKE)
+        set(CMAKE_INSTALL_LIBEXECDIR "lib/tpm-pin" CACHE PATH "Helper binary directory")
+    endif()
+endif()
+
 include(GNUInstallDirs)
 
-option(BUILD_GUI_ONLY "Build only the GUI application and desktop integration assets (e.g. for Flatpak)" OFF)
-
 if(NOT BUILD_GUI_ONLY)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(-Wall -Wextra)
+    endif()
+
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
+
+    find_path(SYS_TSS2_INCLUDE_DIR NAMES tss2/tss2_esys.h)
+    find_path(SYS_PAM_INCLUDE_DIR NAMES security/pam_modules.h)
+    if(NOT SYS_TSS2_INCLUDE_DIR OR NOT SYS_PAM_INCLUDE_DIR)
+        message(STATUS "System TSS2 or PAM development headers not found; using bundled compat headers")
+        include_directories(AFTER SYSTEM ${CMAKE_CURRENT_SOURCE_DIR}/include/compat)
+    endif()
 
     find_package(OpenSSL REQUIRED)
 
@@ -76,6 +107,9 @@ if(NOT BUILD_GUI_ONLY)
         PREFIX ""
         OUTPUT_NAME "pam_tpm_pin"
     )
+    target_compile_definitions(pam_tpm_pin PRIVATE
+        TPM_PIN_VERIFY_PATH="${CMAKE_INSTALL_FULL_LIBEXECDIR}/tpm-pin-verify"
+    )
     target_link_libraries(pam_tpm_pin PRIVATE
         tpmpin_common
         ${PAM_LIB}
@@ -120,9 +154,11 @@ if(NOT BUILD_GUI_ONLY)
         DESTINATION ${CMAKE_INSTALL_DATADIR}/polkit-1/actions
     )
 
-    install(FILES packaging/pam-configs/tpm-pin
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/pam-configs
-    )
+    if(INSTALL_PAM_CONFIGS)
+        install(FILES packaging/pam-configs/tpm-pin
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/pam-configs
+        )
+    endif()
 
     set(UDEV_RULES_DIR "lib/udev/rules.d" CACHE PATH "Directory for udev rules")
     install(FILES packaging/udev/70-tpm-pin.rules
@@ -133,6 +169,12 @@ if(NOT BUILD_GUI_ONLY)
     install(FILES packaging/systemd/polkit-agent-helper-tpm-pin.conf
         DESTINATION ${SYSTEMD_UNIT_DIR}/polkit-agent-helper@.service.d
         RENAME 50-tpm-pin.conf
+    )
+
+    set(TMPFILES_DIR "lib/tmpfiles.d" CACHE PATH "Directory for systemd-tmpfiles rules")
+    install(FILES packaging/systemd/tpm-pin-tmpfiles.conf
+        DESTINATION ${TMPFILES_DIR}
+        RENAME tpm-pin.conf
     )
 endif()
 
@@ -167,12 +209,27 @@ if(NOT BUILD_GUI_ONLY)
     set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
     set(CPACK_GENERATOR "TGZ;DEB;RPM")
 
-    set(CPACK_PACKAGE_DESCRIPTION "Hardware-backed PIN authentication using TPM 2.0. Integrates with PAM for login screen (GDM/SDDM), lock screen, sudo, and desktop keyring auto-unlock. Includes a native GTK4/Libadwaita settings application.")
+    set(CPACK_PACKAGE_DESCRIPTION "Hardware-backed PIN authentication using TPM 2.0. Integrates with PAM for login screen (GDM/SDDM/greetd), lock screen, sudo, and desktop keyring auto-unlock. Includes a native GTK4/Libadwaita settings application.")
     set(CPACK_DEBIAN_PACKAGE_DESCRIPTION "${CPACK_PACKAGE_DESCRIPTION}")
     set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Secure PIN Team <steace@coderage.pro>")
     set(CPACK_DEBIAN_PACKAGE_SECTION "admin")
-    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libpam0g, python3, python3-gi, gir1.2-adw-1, gir1.2-gtk-4.0")
+
+    find_program(DPKG_CMD dpkg)
+    find_program(DPKG_SHLIBDEPS_CMD dpkg-shlibdeps)
+    if(NOT DPKG_CMD)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)$")
+            set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+            set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "arm64")
+        endif()
+    endif()
+    if(DPKG_SHLIBDEPS_CMD)
+        set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+        set(CPACK_DEBIAN_PACKAGE_DEPENDS "libpam0g, python3, python3-gi, gir1.2-adw-1, gir1.2-gtk-4.0")
+    else()
+        set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+        set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6, libpam0g, libssl3t64 | libssl3, libtss2-esys-3.0.2-0t64 | libtss2-esys-3.0.2-0, python3, python3-gi, gir1.2-adw-1, gir1.2-gtk-4.0")
+    endif()
     set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
         "${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postinst;${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/prerm;${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postrm"
     )
@@ -186,7 +243,10 @@ if(NOT BUILD_GUI_ONLY)
     set(CPACK_RPM_PRE_UNINSTALL_SCRIPT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/rpm/preun")
     set(CPACK_RPM_PACKAGE_REQUIRES "pam, tpm2-tss, python3, python3-gobject, libadwaita")
     set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
+        /usr/lib
+        /usr/lib/security
         /usr/libexec
+        /usr/lib/tmpfiles.d
         /usr/lib/udev
         /usr/lib/udev/rules.d
         /usr/lib/systemd

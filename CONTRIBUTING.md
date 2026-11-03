@@ -81,7 +81,7 @@ Install the required build tools, cryptographic libraries, PAM development heade
 - **Arch Linux**:
 
   ```bash
-  sudo pacman -S cmake gcc pkgconf openssl pam tpm2-tss python python-gobject libadwaita swtpm
+  sudo pacman -S --needed base-devel cmake gcc pkgconf openssl pam polkit tpm2-tss python python-gobject gtk4 libadwaita swtpm
   ```
 
 ### TPM Access & Permissions
@@ -143,7 +143,7 @@ To verify package creation across formats:
 ./build.sh
 ```
 
-Generated packages (`.deb`, `.rpm`, `.tar.gz`) will be placed into the `dist/` directory.
+Generated packages (`.deb`, `.rpm`, `.tar.gz`, and native `.pkg.tar.zst` on Arch Linux) will be placed into the `dist/` directory.
 
 ---
 
