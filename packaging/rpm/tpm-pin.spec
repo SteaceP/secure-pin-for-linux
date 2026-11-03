@@ -1,5 +1,5 @@
 Name:           tpm-pin
-Version:        1.0.5
+Version:        1.0.6
 Release:        1%{?dist}
 Summary:        Windows Hello-style TPM 2.0 PIN authentication for Linux
 
@@ -70,6 +70,12 @@ fi
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 
 %changelog
+* Tue Nov 03 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.6-1
+- Enhance Fedora, RHEL, and Bazzite PAM stack compatibility and preserve authselect profile symlinks
+- Integrate native Makefile fallback support with automatic directory creation and packaging targets
+- Harden PAM manager rule insertion to protect relative jump offsets and sanitize execution
+- Expand automated test harness with Fedora/Bazzite PAM stack, idempotency, and symlink verification
+
 * Tue Nov 03 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.5-1
 - Enforce best coding practices, compiler security flags, and static analysis recommendations
 - Securely cleanse sensitive cryptographic structures, derived PIN auth, and plaintext keys from memory

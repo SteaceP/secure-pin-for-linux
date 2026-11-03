@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(tpm-pin VERSION 1.0.5 LANGUAGES C)
+project(tpm-pin VERSION 1.0.6 LANGUAGES C)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 17)
@@ -245,6 +245,8 @@ if(NOT BUILD_GUI_ONLY)
     set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
         /usr/lib
         /usr/lib/security
+        /usr/lib64
+        /usr/lib64/security
         /usr/libexec
         /usr/lib/tmpfiles.d
         /usr/lib/udev

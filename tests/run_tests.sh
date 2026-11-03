@@ -5,14 +5,21 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
 echo "=== Building Secure PIN for Linux ==="
-if [ -f build/CMakeCache.txt ]; then
-    if ! grep -q "CMAKE_CACHEFILE_DIR:INTERNAL=$DIR/build" build/CMakeCache.txt 2>/dev/null; then
-        echo "Stale CMake cache detected, clearing build cache..."
-        rm -rf build/CMakeCache.txt build/CMakeFiles
+if command -v cmake >/dev/null 2>&1; then
+    if [ -f build/CMakeCache.txt ]; then
+        if ! grep -q "CMAKE_CACHEFILE_DIR:INTERNAL=$DIR/build" build/CMakeCache.txt 2>/dev/null; then
+            echo "Stale CMake cache detected, clearing build cache..."
+            rm -rf build/CMakeCache.txt build/CMakeFiles
+        fi
     fi
+    cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build
+elif command -v make >/dev/null 2>&1; then
+    make -j"$(nproc 2>/dev/null || echo 2)"
+else
+    echo "Neither cmake nor make found" >&2
+    exit 1
 fi
-cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
 
 echo ""
 echo "=== Checking Python GTK4 / Libadwaita Settings App ==="

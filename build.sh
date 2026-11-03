@@ -108,42 +108,64 @@ if [ "$DO_TEST" = true ]; then
     "$ROOT_DIR/tests/run_tests.sh"
 fi
 
-echo "Configuring CMake (${BUILD_TYPE})..."
-cmake -B "$BUILD_DIR" -S "$ROOT_DIR" \
-    -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-    -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+if command -v cmake >/dev/null 2>&1; then
+    echo "Configuring CMake (${BUILD_TYPE})..."
+    cmake -B "$BUILD_DIR" -S "$ROOT_DIR" \
+        -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+        -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
-echo "Building project (${JOBS} jobs)..."
-cmake --build "$BUILD_DIR" -j"$JOBS"
+    echo "Building project (${JOBS} jobs)..."
+    cmake --build "$BUILD_DIR" -j"$JOBS"
+elif command -v make >/dev/null 2>&1; then
+    echo "CMake not found, building via Makefile (${JOBS} jobs)..."
+    make BUILD_DIR="$BUILD_DIR" PREFIX="$PREFIX" -j"$JOBS"
+else
+    echo "Error: Neither cmake nor make found." >&2
+    exit 1
+fi
 
 if [ "$DO_PACKAGE" = true ]; then
     echo "Generating release packages..."
     mkdir -p "$DIST_DIR"
 
-    pushd "$BUILD_DIR" >/dev/null
+    if command -v cpack >/dev/null 2>&1 && [ -f "$BUILD_DIR/CPackConfig.cmake" ]; then
+        pushd "$BUILD_DIR" >/dev/null
 
-    echo "Building Debian package (.deb)..."
-    cpack -G DEB
+        echo "Building Debian package (.deb)..."
+        cpack -G DEB
 
-    if command -v rpmbuild >/dev/null 2>&1; then
-        echo "Building RedHat package (.rpm)..."
-        cpack -G RPM
+        if command -v rpmbuild >/dev/null 2>&1; then
+            echo "Building RedHat package (.rpm)..."
+            cpack -G RPM
+        else
+            echo "rpmbuild not found, skipping RPM package generation."
+        fi
+
+        echo "Building universal tarball (.tar.gz)..."
+        cpack -G TGZ
+
+        popd >/dev/null
+
+        rm -rf "$BUILD_DIR/_CPack_Packages"
+
+        shopt -s nullglob
+        PACKAGES=("$BUILD_DIR"/*.deb "$BUILD_DIR"/*.rpm "$BUILD_DIR"/*.tar.gz)
+        if [ ${#PACKAGES[@]} -gt 0 ]; then
+            mv "${PACKAGES[@]}" "$DIST_DIR/"
+        fi
     else
-        echo "rpmbuild not found, skipping RPM package generation."
-    fi
-
-    echo "Building universal tarball (.tar.gz)..."
-    cpack -G TGZ
-
-    popd >/dev/null
-
-    rm -rf "$BUILD_DIR/_CPack_Packages"
-
-    shopt -s nullglob
-    PACKAGES=("$BUILD_DIR"/*.deb "$BUILD_DIR"/*.rpm "$BUILD_DIR"/*.tar.gz)
-    if [ ${#PACKAGES[@]} -gt 0 ]; then
-        mv "${PACKAGES[@]}" "$DIST_DIR/"
+        VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt 2>/dev/null)
+        [ -z "$VERSION" ] && VERSION="1.0.6"
+        echo "Building universal tarball (.tar.gz)..."
+        tar --exclude='.git' \
+            --exclude='./build*' \
+            --exclude='./dist' \
+            --exclude='./release-assets' \
+            --exclude='./flatpak-repo' \
+            --exclude='./.flatpak-builder' \
+            --transform="s,^\.,tpm-pin-${VERSION}," \
+            -czf "$DIST_DIR/tpm-pin-${VERSION}.tar.gz" -C "$ROOT_DIR" .
     fi
 
     HOST_IS_ARCH=false
@@ -153,7 +175,7 @@ if [ "$DO_PACKAGE" = true ]; then
 
     if [ "$BUILD_ARCH" = true ] || { [ "$HOST_IS_ARCH" = true ] && command -v makepkg >/dev/null 2>&1; }; then
         VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-        [ -z "$VERSION" ] && VERSION="1.0.5"
+        [ -z "$VERSION" ] && VERSION="1.0.6"
         if command -v makepkg >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
             echo "Building Arch Linux package natively via makepkg..."
             ARCH_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tpm-pin-makepkg.XXXXXX")
@@ -202,7 +224,7 @@ if [ "$DO_PACKAGE" = true ]; then
         if command -v flatpak-builder >/dev/null 2>&1; then
             echo "Building Flatpak package via flatpak-builder..."
             VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-            [ -z "$VERSION" ] && VERSION="1.0.5"
+            [ -z "$VERSION" ] && VERSION="1.0.6"
             mkdir -p "$ROOT_DIR/build-flatpak" "$ROOT_DIR/flatpak-repo"
             flatpak-builder --force-clean --repo="$ROOT_DIR/flatpak-repo" "$ROOT_DIR/build-flatpak" packaging/flatpak/io.github.securepin.Settings.yml
             flatpak build-bundle "$ROOT_DIR/flatpak-repo" "$DIST_DIR/io.github.securepin.Settings-${VERSION}.flatpak" io.github.securepin.Settings

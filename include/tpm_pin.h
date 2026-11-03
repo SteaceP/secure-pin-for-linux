@@ -144,6 +144,7 @@ bool           pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, si
 bool           pam_manager_disable(char *err_buf, size_t err_len);
 bool           pam_manager_is_enabled(void);
 bool           pam_manager_apply_auth_file(const char *filepath);
+bool           pam_manager_apply_fedora_file(const char *filepath);
 bool           pam_manager_remove_from_file(const char *filepath);
 bool           pam_manager_configure_arch_keyring_file(const char *filepath, bool enable);
 

@@ -1,3 +1,12 @@
+tpm-pin (1.0.6-1) unstable; urgency=medium
+
+  * Enhance Fedora, RHEL, and Bazzite PAM stack compatibility and preserve authselect profile symlinks.
+  * Integrate native Makefile fallback support with automatic directory creation and packaging targets.
+  * Harden PAM manager rule insertion to protect relative jump offsets and sanitize execution.
+  * Expand automated test harness with Fedora/Bazzite PAM stack, idempotency, and symlink verification.
+
+ -- Secure PIN Maintainers <steace@coderage.pro>  Tue, 03 Nov 2026 12:35:00 -0500
+
 tpm-pin (1.0.5-1) unstable; urgency=medium
 
   * Enforce best coding practices, compiler security flags, and static analysis recommendations.
