@@ -51,33 +51,45 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
 
     def _find_ctl(self):
         if self._is_flatpak():
-            return "tpm-pin-ctl"
-        candidates = [
+            return "/usr/bin/tpm-pin-ctl"
+        system_candidates = [
             "/usr/bin/tpm-pin-ctl",
             "/usr/local/bin/tpm-pin-ctl",
-            shutil.which("tpm-pin-ctl"),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "build", "tpm-pin-ctl")),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "tpm-pin-ctl")),
         ]
-        for c in candidates:
-            if c and os.path.isfile(c) and os.access(c, os.X_OK):
-                return c
-        return "tpm-pin-ctl"
+        for c in system_candidates:
+            if os.path.isfile(c) and os.access(c, os.X_OK):
+                st = os.stat(c)
+                if st.st_uid == 0 and (st.st_mode & 0o022) == 0:
+                    return c
+        if os.geteuid() == 0:
+            dev_candidates = [
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "build", "tpm-pin-ctl")),
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "tpm-pin-ctl")),
+            ]
+            for c in dev_candidates:
+                if os.path.isfile(c) and os.access(c, os.X_OK):
+                    return c
+        return "/usr/bin/tpm-pin-ctl"
 
     def run_ctl(self, args, need_root=False, input_text=None):
+        ctl = self.ctl_path
+        if need_root and not self._is_flatpak() and not os.path.isfile(ctl):
+            return False, f"System binary not found: {ctl}"
         if self._is_flatpak():
             cmd = ["flatpak-spawn", "--host"]
             if need_root:
-                cmd += ["pkexec", self.ctl_path] + args
+                cmd += ["pkexec", ctl] + args
             else:
-                cmd += [self.ctl_path] + args
+                cmd += [ctl] + args
         else:
-            cmd = [self.ctl_path] + args
+            cmd = [ctl] + args
             if need_root and os.geteuid() != 0:
                 cmd = ["pkexec"] + cmd
         try:
-            res = subprocess.run(cmd, input=input_text, capture_output=True, text=True, check=True)
+            res = subprocess.run(cmd, input=input_text, capture_output=True, text=True, check=True, timeout=120)
             return True, res.stdout.strip()
+        except subprocess.TimeoutExpired:
+            return False, "Command timed out."
         except subprocess.CalledProcessError as e:
             return False, e.stderr.strip() or e.stdout.strip()
         except Exception as e:
@@ -89,7 +101,7 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
         else:
             cmd = [self.ctl_path, "status", "--json"]
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=15)
             data = json.loads(res.stdout)
             data["host_installed"] = True
             return data
@@ -98,7 +110,7 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
             if self._is_flatpak():
                 try:
                     check = subprocess.run(["flatpak-spawn", "--host", "which", self.ctl_path],
-                                           capture_output=True, text=True)
+                                           capture_output=True, text=True, timeout=10)
                     if check.returncode != 0:
                         host_installed = False
                 except Exception:
@@ -235,12 +247,12 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
         self.sw_digits.connect("notify::active", lambda s, p: self.on_config_toggle(s, "digits_only"))
         grp_policy.add(self.sw_digits)
 
-        self.spin_min = Adw.SpinRow.new_with_range(4, 16, 1)
+        self.spin_min = Adw.SpinRow.new_with_range(4, 64, 1)
         self.spin_min.set_title("Minimum PIN Length")
         self.spin_min.connect("notify::value", lambda s, p: self.on_config_set(s, "min_length"))
         grp_policy.add(self.spin_min)
 
-        self.spin_max = Adw.SpinRow.new_with_range(8, 64, 1)
+        self.spin_max = Adw.SpinRow.new_with_range(4, 64, 1)
         self.spin_max.set_title("Maximum PIN Length")
         self.spin_max.connect("notify::value", lambda s, p: self.on_config_set(s, "max_length"))
         grp_policy.add(self.spin_max)
@@ -372,6 +384,16 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
         ok, msg = self.run_ctl(["config", "set", key, str(val)], need_root=True)
         if ok:
             self.state[key] = val
+            self._updating_ui = True
+            try:
+                if key == "min_length" and val > self.state.get("max_length", 32):
+                    self.state["max_length"] = val
+                    self.spin_max.set_value(val)
+                elif key == "max_length" and val < self.state.get("min_length", 4):
+                    self.state["min_length"] = val
+                    self.spin_min.set_value(val)
+            finally:
+                self._updating_ui = False
         else:
             self._updating_ui = True
             spin.set_value(self.state.get(key, 4))
@@ -496,6 +518,10 @@ class EnrollPinDialog(Adw.PreferencesWindow):
         pwd = self.row_pwd.get_text() if self.need_pwd else ""
         pin = self.row_pin.get_text()
         confirm = self.row_confirm.get_text()
+
+        if self.need_pwd and not pwd:
+            self._show_err("Please enter your current login password (or disable Auto-Unlock Desktop Keyring).")
+            return
 
         if pin != confirm:
             self._show_err("PINs do not match.")

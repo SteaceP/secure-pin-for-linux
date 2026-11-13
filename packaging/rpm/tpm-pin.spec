@@ -1,5 +1,5 @@
 Name:           tpm-pin
-Version:        1.0.6
+Version:        1.0.7
 Release:        1%{?dist}
 Summary:        Windows Hello-style TPM 2.0 PIN authentication for Linux
 
@@ -66,10 +66,18 @@ fi
 %{_datadir}/polkit-1/actions/io.github.securepin.policy
 %{_prefix}/lib/udev/rules.d/70-tpm-pin.rules
 %{_prefix}/lib/systemd/system/polkit-agent-helper@.service.d/50-tpm-pin.conf
-%dir %attr(0700,root,root) %{_sharedstatedir}/tpm-pin
+%{_prefix}/lib/tmpfiles.d/tpm-pin.conf
+%dir %attr(0755,root,root) %{_sharedstatedir}/tpm-pin
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 
 %changelog
+* Fri Nov 13 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.7-1
+- Bind sealed blob headers and UID into AES-256-GCM AAD and enforce 0600 root-only sealed.blob with sealed.meta status file
+- Remove cleartext ESYS_TR_PASSWORD and broken TPM2_ALG_NULL fallbacks during TPM sealing/unsealing
+- Fix pam_kwallet5.so heap over-read and avoid poisoning PAM_AUTHTOK on failed PIN verification
+- Replace system() calls with sanitized execve(), resolve symlinks safely, and mask packaged overrides on disable
+- Harden CLI/GUI secret handling, JSON output escaping, RPM tmpfiles packaging, and test suite coverage
+
 * Tue Nov 03 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.6-1
 - Enhance Fedora, RHEL, and Bazzite PAM stack compatibility and preserve authselect profile symlinks
 - Integrate native Makefile fallback support with automatic directory creation and packaging targets

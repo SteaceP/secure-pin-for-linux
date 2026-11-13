@@ -51,9 +51,10 @@ bool tpm_pin_derive_auth(const char *pin, const uint8_t *salt, size_t salt_len, 
     return (ret == 1);
 }
 
-bool tpm_pin_encrypt(const uint8_t *key, const uint8_t *iv,
-                     const uint8_t *plaintext, size_t pt_len,
-                     uint8_t *ciphertext, uint8_t *tag) {
+bool tpm_pin_encrypt_aad(const uint8_t *key, const uint8_t *iv,
+                         const uint8_t *aad, size_t aad_len,
+                         const uint8_t *plaintext, size_t pt_len,
+                         uint8_t *ciphertext, uint8_t *tag) {
     if (!key || !iv || !plaintext || !ciphertext || !tag) return false;
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
@@ -65,6 +66,11 @@ bool tpm_pin_encrypt(const uint8_t *key, const uint8_t *iv,
     if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) goto cleanup;
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, TPM_PIN_IV_LEN, NULL) != 1) goto cleanup;
     if (EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv) != 1) goto cleanup;
+
+    if (aad && aad_len > 0) {
+        int aad_out = 0;
+        if (EVP_EncryptUpdate(ctx, NULL, &aad_out, aad, (int)aad_len) != 1) goto cleanup;
+    }
 
     if (pt_len > 0) {
         if (EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, (int)pt_len) != 1) goto cleanup;
@@ -81,9 +87,10 @@ cleanup:
     return ok;
 }
 
-bool tpm_pin_decrypt(const uint8_t *key, const uint8_t *iv,
-                     const uint8_t *ciphertext, size_t ct_len,
-                     const uint8_t *tag, uint8_t *plaintext) {
+bool tpm_pin_decrypt_aad(const uint8_t *key, const uint8_t *iv,
+                         const uint8_t *aad, size_t aad_len,
+                         const uint8_t *ciphertext, size_t ct_len,
+                         const uint8_t *tag, uint8_t *plaintext) {
     if (!key || !iv || !ciphertext || !tag || !plaintext) return false;
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
@@ -95,6 +102,11 @@ bool tpm_pin_decrypt(const uint8_t *key, const uint8_t *iv,
     if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) goto cleanup;
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, TPM_PIN_IV_LEN, NULL) != 1) goto cleanup;
     if (EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv) != 1) goto cleanup;
+
+    if (aad && aad_len > 0) {
+        int aad_out = 0;
+        if (EVP_DecryptUpdate(ctx, NULL, &aad_out, aad, (int)aad_len) != 1) goto cleanup;
+    }
 
     if (ct_len > 0) {
         if (EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, (int)ct_len) != 1) goto cleanup;
@@ -113,4 +125,16 @@ bool tpm_pin_decrypt(const uint8_t *key, const uint8_t *iv,
 cleanup:
     EVP_CIPHER_CTX_free(ctx);
     return ok;
+}
+
+bool tpm_pin_encrypt(const uint8_t *key, const uint8_t *iv,
+                     const uint8_t *plaintext, size_t pt_len,
+                     uint8_t *ciphertext, uint8_t *tag) {
+    return tpm_pin_encrypt_aad(key, iv, NULL, 0, plaintext, pt_len, ciphertext, tag);
+}
+
+bool tpm_pin_decrypt(const uint8_t *key, const uint8_t *iv,
+                     const uint8_t *ciphertext, size_t ct_len,
+                     const uint8_t *tag, uint8_t *plaintext) {
+    return tpm_pin_decrypt_aad(key, iv, NULL, 0, ciphertext, ct_len, tag, plaintext);
 }

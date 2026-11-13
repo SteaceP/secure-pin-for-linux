@@ -1,3 +1,13 @@
+tpm-pin (1.0.7-1) unstable; urgency=high
+
+  * Bind sealed blob headers and UID into AES-256-GCM AAD and enforce 0600 root-only sealed.blob ownership with sealed.meta status file.
+  * Remove cleartext ESYS_TR_PASSWORD and broken TPM2_ALG_NULL session fallbacks in TPM sealing/unsealing.
+  * Fix pam_kwallet5.so heap over-read in PAM session hook and stop setting PAM_AUTHTOK on failed PIN attempts.
+  * Replace system() shell calls with sanitized execve(), resolve symlinks safely, mask packaged systemd/udev overrides on disable, and harden CLI/GUI input validation.
+  * Enforce TPM DA configuration during enrollment and DA config updates, and expand unit tests.
+
+ -- Secure PIN Maintainers <steace@coderage.pro>  Fri, 13 Nov 2026 05:48:00 -0500
+
 tpm-pin (1.0.6-1) unstable; urgency=medium
 
   * Enhance Fedora, RHEL, and Bazzite PAM stack compatibility and preserve authselect profile symlinks.

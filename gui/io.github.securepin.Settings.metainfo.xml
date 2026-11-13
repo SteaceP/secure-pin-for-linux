@@ -34,6 +34,11 @@
   </provides>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="1.0.7" date="2026-11-13">
+      <description>
+        <p>Release 1.0.7: Comprehensive security and reliability hardening — root-only sealed credential blobs with AES-256-GCM AAD header/UID binding, mandatory TPM bus parameter encryption without cleartext fallbacks, pam_kwallet5 heap over-read and pam_faillock fixes, execve command sanitization, symlink/TOCTOU protection, /dev/null masking of packaged rules on disable, and expanded security test coverage.</p>
+      </description>
+    </release>
     <release version="1.0.6" date="2026-11-03">
       <description>
         <p>Release 1.0.6: Enhanced Fedora, RHEL, and Bazzite PAM stack compatibility, native authselect profile management with symlink preservation, standalone Makefile fallback build support, hardened relative PAM jump offset preservation, and expanded multi-distro test coverage.</p>

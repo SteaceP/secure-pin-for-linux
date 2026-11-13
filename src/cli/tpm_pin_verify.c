@@ -29,6 +29,10 @@ int main(int argc, char **argv) {
     tpm_pin_config_t cfg;
     tpm_pin_config_load(NULL, &cfg);
 
+    if (getuid() != 0 && !cfg.enable_lockscreen) {
+        return 1;
+    }
+
     char pin_buf[TPM_PIN_MAX_PIN_LEN + 2] = {0};
     if (!fgets(pin_buf, sizeof(pin_buf), stdin)) {
         return 1;

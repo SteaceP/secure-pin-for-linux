@@ -129,8 +129,12 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
     (void)argv;
 
     /* Prevent TSS2 error strings from leaking into Polkit helper socket streams */
-    setenv("TSS2_LOG", "all+NONE", 1);
-    setenv("TSS2_LOGFILE", "/dev/null", 1);
+    if (getenv("TSS2_LOG") == NULL) {
+        setenv("TSS2_LOG", "all+NONE", 1);
+    }
+    if (getenv("TSS2_LOGFILE") == NULL) {
+        setenv("TSS2_LOGFILE", "/dev/null", 1);
+    }
 
     const char *service = NULL;
     pam_get_item(pamh, PAM_SERVICE, (const void **)&service);
@@ -186,24 +190,34 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
     char unsealed_pwd[TPM_PIN_MAX_PASSWORD_LEN] = {0};
     int tpm_rc = 0;
 
-    bool pin_success = false;
-    if (tpm_pin_is_likely_pin(input, &cfg)) {
-        bool need_helper = (geteuid() != 0 &&
-                            pwd->pw_uid == getuid() &&
-                            cfg.tcti_name[0] == '\0' &&
-                            secure_getenv("TCTI") == NULL &&
-                            faccessat(AT_FDCWD, "/dev/tpmrm0", R_OK | W_OK, AT_EACCESS) != 0 &&
-                            faccessat(AT_FDCWD, "/dev/tpm0", R_OK | W_OK, AT_EACCESS) != 0);
+    bool is_unpriv = (geteuid() != 0);
+    if (is_unpriv && pwd->pw_uid != getuid()) {
+        tpm_pin_zero(input, strlen(input));
+        free(input);
+        return PAM_AUTHINFO_UNAVAIL;
+    }
 
-        if (need_helper) {
+    bool likely_pin = tpm_pin_is_likely_pin(input, &cfg);
+    bool pin_success = false;
+    if (likely_pin) {
+        bool use_helper = (is_unpriv &&
+                           pwd->pw_uid == getuid() &&
+                           find_verify_helper() != NULL &&
+                           cfg.tcti_name[0] == '\0' &&
+                           secure_getenv("TCTI") == NULL);
+
+        if (use_helper) {
             pin_success = verify_via_setuid_helper(username, input, &tpm_rc);
         } else {
+            /* Never unseal keyring password into an unprivileged caller's address space */
+            char *pwd_out = is_unpriv ? NULL : unsealed_pwd;
+            size_t pwd_sz = is_unpriv ? 0 : sizeof(unsealed_pwd);
             pin_success = tpm_pin_verify_user(
                 pwd->pw_uid,
                 input,
                 &cfg,
-                unsealed_pwd,
-                sizeof(unsealed_pwd),
+                pwd_out,
+                pwd_sz,
                 &tpm_rc
             );
         }
@@ -215,14 +229,10 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
             /* Pass unsealed system password to PAM_AUTHTOK so GNOME Keyring / KWallet unlock automatically */
             pam_set_item(pamh, PAM_AUTHTOK, unsealed_pwd);
 
-            /* Stash unsealed password in PAM data so pam_gnome_keyring and pam_kwallet5 sessions auto-unlock */
+            /* Stash unsealed password in PAM data so pam_gnome_keyring sessions auto-unlock */
             char *gkr_pwd = strdup(unsealed_pwd);
             if (gkr_pwd) {
                 pam_set_data(pamh, "gkr_system_authtok", gkr_pwd, pam_cleanup_secret);
-            }
-            char *kw_pwd = strdup(unsealed_pwd);
-            if (kw_pwd) {
-                pam_set_data(pamh, "kwallet5_key", kw_pwd, pam_cleanup_secret);
             }
         } else {
             pam_set_item(pamh, PAM_AUTHTOK, input);
@@ -235,10 +245,13 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
 
     /*
      * PIN verification was not successful, or input was not in PIN format.
-     * Store the entered input as PAM_AUTHTOK so downstream pam_unix try_first_pass
-     * (or pam_systemd_home) can test it as a regular user password without prompting twice!
+     * Store the entered input as PAM_AUTHTOK only if it wasn't a digits-only PIN
+     * (so downstream pam_unix.so prompts for the Unix password instead of burning
+     * pam_faillock tries on a failed PIN), or if alphanumeric PIN mode is active.
      */
-    pam_set_item(pamh, PAM_AUTHTOK, input);
+    if (!likely_pin || !cfg.digits_only) {
+        pam_set_item(pamh, PAM_AUTHTOK, input);
+    }
 
     if (!(flags & PAM_SILENT)) {
         if ((tpm_rc & 0xFFF) == (TPM2_RC_LOCKOUT & 0xFFF)) {
@@ -268,7 +281,7 @@ int pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc, const char **argv)
     (void)flags;
     (void)argc;
     (void)argv;
-    return PAM_SUCCESS;
+    return PAM_IGNORE;
 }
 
 int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv) {
@@ -276,7 +289,7 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
     (void)flags;
     (void)argc;
     (void)argv;
-    return PAM_SUCCESS;
+    return PAM_IGNORE;
 }
 
 int pam_sm_close_session(pam_handle_t *pamh, int flags, int argc, const char **argv) {
@@ -284,33 +297,13 @@ int pam_sm_close_session(pam_handle_t *pamh, int flags, int argc, const char **a
     (void)flags;
     (void)argc;
     (void)argv;
-    return PAM_SUCCESS;
+    return PAM_IGNORE;
 }
 
 int pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv) {
+    (void)pamh;
     (void)flags;
     (void)argc;
     (void)argv;
-
-    /* When user changes password, optionally re-seal */
-    const char *username = NULL;
-    if (pam_get_user(pamh, &username, NULL) != PAM_SUCCESS || !username) {
-        return PAM_SUCCESS;
-    }
-
-    struct passwd pwd_buf;
-    struct passwd *pwd = NULL;
-    char pbuf[1024];
-    if (getpwnam_r(username, &pwd_buf, pbuf, sizeof(pbuf), &pwd) != 0 || !pwd) {
-        return PAM_SUCCESS;
-    }
-
-    tpm_pin_config_t cfg;
-    tpm_pin_config_load(NULL, &cfg);
-
-    if (!tpm_pin_user_is_enrolled(pwd->pw_uid, &cfg) || !cfg.enable_keyring_unlock) {
-        return PAM_SUCCESS;
-    }
-
-    return PAM_SUCCESS;
+    return PAM_IGNORE;
 }

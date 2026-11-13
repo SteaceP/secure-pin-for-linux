@@ -51,6 +51,30 @@ static char *read_secret(const char *prompt) {
     return line;
 }
 
+static void print_json_escaped(const char *s) {
+    putchar('"');
+    if (s) {
+        for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+            unsigned char c = *p;
+            if (c == '"' || c == '\\') {
+                putchar('\\');
+                putchar(c);
+            } else if (c == '\n') {
+                fputs("\\n", stdout);
+            } else if (c == '\r') {
+                fputs("\\r", stdout);
+            } else if (c == '\t') {
+                fputs("\\t", stdout);
+            } else if (c < 0x20) {
+                printf("\\u%04x", (unsigned int)c);
+            } else {
+                putchar(c);
+            }
+        }
+    }
+    putchar('"');
+}
+
 static void print_usage(const char *prog) {
     printf("Secure PIN for Linux (TPM 2.0 Windows Hello–Style PIN)\n\n");
     printf("Usage:\n");
@@ -73,8 +97,8 @@ int main(int argc, char **argv) {
 
     const char *action = argv[1];
     const char *username = NULL;
-    const char *opt_pin = NULL;
-    const char *opt_pwd = NULL;
+    char *opt_pin_buf = NULL;
+    char *opt_pwd_buf = NULL;
     bool json_output = false;
 
     for (int i = 2; i < argc; i++) {
@@ -83,12 +107,25 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--user") == 0 && i + 1 < argc) {
             username = argv[++i];
         } else if (strcmp(argv[i], "--pin") == 0 && i + 1 < argc) {
-            opt_pin = argv[++i];
+            i++;
+            if (opt_pin_buf) {
+                tpm_pin_zero(opt_pin_buf, strlen(opt_pin_buf));
+                free(opt_pin_buf);
+            }
+            opt_pin_buf = strdup(argv[i]);
+            tpm_pin_zero(argv[i], strlen(argv[i]));
         } else if (strcmp(argv[i], "--password") == 0 && i + 1 < argc) {
-            opt_pwd = argv[++i];
+            i++;
+            if (opt_pwd_buf) {
+                tpm_pin_zero(opt_pwd_buf, strlen(opt_pwd_buf));
+                free(opt_pwd_buf);
+            }
+            opt_pwd_buf = strdup(argv[i]);
+            tpm_pin_zero(argv[i], strlen(argv[i]));
         }
     }
 
+    int exit_code = 1;
     uid_t caller_uid = getuid();
     uid_t uid = caller_uid;
     char user_buf[128] = {0};
@@ -99,11 +136,11 @@ int main(int argc, char **argv) {
         char pbuf[1024];
         if (getpwnam_r(username, &pwd_s, pbuf, sizeof(pbuf), &pw) != 0 || !pw) {
             fprintf(stderr, "Error: Unknown user '%s'\n", username);
-            return 1;
+            goto cleanup;
         }
         if (caller_uid != 0 && pw->pw_uid != caller_uid) {
             fprintf(stderr, "Error: Permission denied (only root can target another user).\n");
-            return 1;
+            goto cleanup;
         }
         uid = pw->pw_uid;
         snprintf(user_buf, sizeof(user_buf), "%s", pw->pw_name);
@@ -116,8 +153,13 @@ int main(int argc, char **argv) {
             if (orig_uid_str && orig_uid_str[0] != '\0') {
                 char *endptr = NULL;
                 unsigned long parsed = strtoul(orig_uid_str, &endptr, 10);
-                if (endptr && *endptr == '\0' && parsed > 0) {
-                    uid = (uid_t)parsed;
+                if (endptr && *endptr == '\0' && parsed > 0 && parsed <= (unsigned long)UINT32_MAX) {
+                    struct passwd pwd_check;
+                    struct passwd *pw_check = NULL;
+                    char pbuf_check[1024];
+                    if (getpwuid_r((uid_t)parsed, &pwd_check, pbuf_check, sizeof(pbuf_check), &pw_check) == 0 && pw_check) {
+                        uid = (uid_t)parsed;
+                    }
                 }
             }
         }
@@ -143,10 +185,18 @@ int main(int argc, char **argv) {
             printf("{\n");
             printf("  \"tpm_present\": %s,\n", status.tpm_present ? "true" : "false");
             printf("  \"tpm_accessible\": %s,\n", status.tpm_accessible ? "true" : "false");
-            printf("  \"tpm_manufacturer\": \"%s\",\n", status.manufacturer[0] ? status.manufacturer : "TPM 2.0");
-            printf("  \"hardware_type\": \"%s\",\n", status.hardware_type[0] ? status.hardware_type : "TPM 2.0");
-            printf("  \"bus_encryption\": \"%s\",\n", status.bus_encryption[0] ? status.bus_encryption : "Active");
-            printf("  \"user\": \"%s\",\n", username ? username : "unknown");
+            printf("  \"tpm_manufacturer\": ");
+            print_json_escaped(status.manufacturer[0] ? status.manufacturer : "TPM 2.0");
+            printf(",\n");
+            printf("  \"hardware_type\": ");
+            print_json_escaped(status.hardware_type[0] ? status.hardware_type : "TPM 2.0");
+            printf(",\n");
+            printf("  \"bus_encryption\": ");
+            print_json_escaped(status.bus_encryption[0] ? status.bus_encryption : "Active");
+            printf(",\n");
+            printf("  \"user\": ");
+            print_json_escaped(username ? username : "unknown");
+            printf(",\n");
             printf("  \"uid\": %u,\n", (unsigned int)uid);
             printf("  \"is_enrolled\": %s,\n", status.is_enrolled ? "true" : "false");
             printf("  \"pcr7_bound\": %s,\n", status.pcr7_bound ? "true" : "false");
@@ -156,7 +206,9 @@ int main(int argc, char **argv) {
             printf("  \"max_tries\": %u,\n", status.max_tries);
             printf("  \"keyring_pwd_saved\": %s,\n", status.keyring_pwd_saved ? "true" : "false");
             printf("  \"pam_enabled\": %s,\n", pam_active ? "true" : "false");
-            printf("  \"distro\": \"%s\",\n", pam_manager_distro_name(distro));
+            printf("  \"distro\": ");
+            print_json_escaped(pam_manager_distro_name(distro));
+            printf(",\n");
             printf("  \"digits_only\": %s,\n", cfg.digits_only ? "true" : "false");
             printf("  \"min_length\": %u,\n", cfg.min_length);
             printf("  \"max_length\": %u,\n", cfg.max_length);
@@ -196,35 +248,58 @@ int main(int argc, char **argv) {
                        status.failed_tries, status.max_tries);
             }
         }
-        return 0;
+        exit_code = 0;
+        goto cleanup;
     }
 
     if (strcmp(action, "enroll") == 0) {
+        if (geteuid() != 0) {
+            fprintf(stderr, "Error: Root privileges required. Run with sudo or pkexec.\n");
+            goto cleanup;
+        }
         tpm_pin_status_t status;
         if (tpm_pin_get_user_status(uid, &cfg, &status)) {
             if (!status.tpm_present) {
                 fprintf(stderr, "Error: TPM 2.0 device was not detected on this system.\n");
                 fprintf(stderr, "Cannot enroll a hardware-backed PIN without a functional TPM 2.0.\n");
-                return 1;
+                goto cleanup;
             }
             if (!status.tpm_accessible) {
                 fprintf(stderr, "Error: TPM 2.0 device is present, but permission was denied (/dev/tpmrm0).\n");
                 fprintf(stderr, "Run with sudo/pkexec, enable PAM integration (sudo tpm-pin-ctl pam enable), or add your user to the 'tss' group.\n");
-                return 1;
+                goto cleanup;
             }
         }
 
         char *pin = NULL;
         char *pwd = NULL;
 
-        if (opt_pwd) {
-            pwd = strdup(opt_pwd);
+        if (opt_pwd_buf) {
+            pwd = strdup(opt_pwd_buf);
         } else if (cfg.enable_keyring_unlock) {
             pwd = read_secret("Enter current login password (to seal for keyring auto-unlock): ");
+            if (pwd && pwd[0] != '\0') {
+                char *confirm_pwd = read_secret("Confirm current login password: ");
+                if (!confirm_pwd || strcmp(pwd, confirm_pwd) != 0) {
+                    fprintf(stderr, "Error: Login passwords do not match.\n");
+                    tpm_pin_zero(pwd, strlen(pwd));
+                    free(pwd);
+                    pwd = NULL;
+                    if (confirm_pwd) {
+                        tpm_pin_zero(confirm_pwd, strlen(confirm_pwd));
+                        free(confirm_pwd);
+                    }
+                    goto cleanup;
+                }
+                tpm_pin_zero(confirm_pwd, strlen(confirm_pwd));
+                free(confirm_pwd);
+            } else {
+                fprintf(stderr, "Note: No login password provided; keyring auto-unlock will not be sealed.\n");
+            }
         }
 
-        if (opt_pin) {
-            pin = strdup(opt_pin);
+        if (opt_pin_buf) {
+            pin = strdup(opt_pin_buf);
         } else {
             pin = read_secret("Enter new PIN: ");
             char *confirm = read_secret("Confirm new PIN: ");
@@ -233,7 +308,7 @@ int main(int argc, char **argv) {
                 if (pin) { tpm_pin_zero(pin, strlen(pin)); free(pin); }
                 if (confirm) { tpm_pin_zero(confirm, strlen(confirm)); free(confirm); }
                 if (pwd) { tpm_pin_zero(pwd, strlen(pwd)); free(pwd); }
-                return 1;
+                goto cleanup;
             }
             tpm_pin_zero(confirm, strlen(confirm));
             free(confirm);
@@ -242,13 +317,12 @@ int main(int argc, char **argv) {
         char err[256];
         if (!tpm_pin_validate_pin(pin, &cfg, err, sizeof(err))) {
             fprintf(stderr, "Policy Error: %s\n", err);
-            tpm_pin_zero(pin, strlen(pin));
-            free(pin);
+            if (pin) { tpm_pin_zero(pin, strlen(pin)); free(pin); }
             if (pwd) {
                 tpm_pin_zero(pwd, strlen(pwd));
                 free(pwd);
             }
-            return 1;
+            goto cleanup;
         }
 
         printf("Sealing PIN into TPM 2.0...\n");
@@ -263,16 +337,16 @@ int main(int argc, char **argv) {
 
         if (ok) {
             printf("Success: PIN successfully enrolled and bound to TPM 2.0!\n");
-            return 0;
+            exit_code = 0;
         } else {
             fprintf(stderr, "Error: Failed to enroll PIN into TPM 2.0.\n");
-            return 1;
         }
+        goto cleanup;
     }
 
     if (strcmp(action, "verify") == 0) {
-        char *pin = opt_pin ? strdup(opt_pin) : read_secret("Enter PIN to verify: ");
-        if (!pin) return 1;
+        char *pin = opt_pin_buf ? strdup(opt_pin_buf) : read_secret("Enter PIN to verify: ");
+        if (!pin) goto cleanup;
 
         char unsealed[TPM_PIN_MAX_PASSWORD_LEN] = {0};
         int tpm_rc = 0;
@@ -287,52 +361,57 @@ int main(int argc, char **argv) {
                 printf("Keyring password successfully unsealed from TPM.\n");
             }
             tpm_pin_zero(unsealed, sizeof(unsealed));
-            return 0;
+            exit_code = 0;
         } else {
             fprintf(stderr, "Verification FAILED: Invalid PIN (TPM code: 0x%x).\n", tpm_rc);
-            return 1;
         }
+        goto cleanup;
     }
 
     if (strcmp(action, "remove") == 0) {
+        if (geteuid() != 0) {
+            fprintf(stderr, "Error: Root privileges required. Run with sudo or pkexec.\n");
+            goto cleanup;
+        }
         if (tpm_pin_remove_user(uid, &cfg)) {
             printf("PIN enrollment removed for user %s.\n", username ? username : "");
-            return 0;
+            exit_code = 0;
         } else {
             fprintf(stderr, "No enrolled PIN found for user %s.\n", username ? username : "");
-            return 1;
         }
+        goto cleanup;
     }
 
     if (strcmp(action, "pam") == 0) {
         if (argc < 3) {
             printf("Usage: %s pam <enable|disable|status>\n", argv[0]);
-            return 1;
+            goto cleanup;
         }
         const char *pam_cmd = argv[2];
         if (strcmp(pam_cmd, "status") == 0) {
             bool active = pam_manager_is_enabled();
             printf("PAM Integration: %s\n", active ? "Enabled" : "Disabled");
-            return active ? 0 : 1;
+            exit_code = active ? 0 : 1;
+            goto cleanup;
         } else if (strcmp(pam_cmd, "enable") == 0) {
             char err[256] = {0};
             if (pam_manager_enable(&cfg, err, sizeof(err))) {
                 printf("Success: PAM integration enabled for %s!\n",
                        pam_manager_distro_name(pam_manager_detect_distro()));
-                return 0;
+                exit_code = 0;
             } else {
                 fprintf(stderr, "Failed to enable PAM: %s\n", err[0] ? err : "Unknown error");
-                return 1;
             }
+            goto cleanup;
         } else if (strcmp(pam_cmd, "disable") == 0) {
             char err[256] = {0};
             if (pam_manager_disable(err, sizeof(err))) {
                 printf("Success: PAM integration disabled.\n");
-                return 0;
+                exit_code = 0;
             } else {
                 fprintf(stderr, "Failed to disable PAM: %s\n", err[0] ? err : "Unknown error");
-                return 1;
             }
+            goto cleanup;
         }
     }
 
@@ -344,11 +423,12 @@ int main(int argc, char **argv) {
             tpm_engine_destroy(&ctx);
             if (rc == TSS2_RC_SUCCESS) {
                 printf("Success: TPM Dictionary Attack lockout counter reset.\n");
-                return 0;
+                exit_code = 0;
+                goto cleanup;
             }
         }
         fprintf(stderr, "Failed to reset TPM lockout counter (RC: 0x%x). Requires root / lockout authorization.\n", rc);
-        return 1;
+        goto cleanup;
     }
 
     if (strcmp(action, "da-config") == 0) {
@@ -378,17 +458,18 @@ int main(int argc, char **argv) {
                 tpm_pin_config_save(NULL, &cfg);
                 printf("Success: TPM Dictionary Attack parameters configured (max_tries=%u, recovery=%u, lockout_recovery=%u).\n",
                        max_tries, recovery_sec, lockout_recovery);
-                return 0;
+                exit_code = 0;
+                goto cleanup;
             }
         }
         fprintf(stderr, "Failed to configure TPM DA protection (RC: 0x%x). Requires root / lockout authorization.\n", rc);
-        return 1;
+        goto cleanup;
     }
 
     if (strcmp(action, "config") == 0) {
         if (argc < 4) {
             printf("Usage: %s config get <key> | config set <key> <value>\n", argv[0]);
-            return 1;
+            goto cleanup;
         }
         const char *sub = argv[2];
         const char *key = argv[3];
@@ -407,19 +488,21 @@ int main(int argc, char **argv) {
             else if (strcasecmp(key, "da_lockout_recovery") == 0) printf("%u\n", cfg.da_lockout_recovery);
             else {
                 fprintf(stderr, "Error: Unknown config key '%s'\n", key);
-                return 1;
+                goto cleanup;
             }
-            return 0;
+            exit_code = 0;
+            goto cleanup;
         } else if (strcmp(sub, "set") == 0 && argc >= 5) {
             const char *val = argv[4];
             bool bval = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0 || strcasecmp(val, "yes") == 0);
+            bool da_changed = false;
 
             if (strcasecmp(key, "digits_only") == 0) cfg.digits_only = bval;
             else if (strcasecmp(key, "min_length") == 0) {
                 long val_num = strtol(val, NULL, 10);
                 if (val_num < 4 || val_num > TPM_PIN_MAX_PIN_LEN) {
                     fprintf(stderr, "Error: min_length must be between 4 and %d\n", TPM_PIN_MAX_PIN_LEN);
-                    return 1;
+                    goto cleanup;
                 }
                 cfg.min_length = (uint32_t)val_num;
                 if (cfg.max_length < cfg.min_length) cfg.max_length = cfg.min_length;
@@ -427,7 +510,7 @@ int main(int argc, char **argv) {
                 long val_num = strtol(val, NULL, 10);
                 if (val_num < 4 || val_num > TPM_PIN_MAX_PIN_LEN) {
                     fprintf(stderr, "Error: max_length must be between 4 and %d\n", TPM_PIN_MAX_PIN_LEN);
-                    return 1;
+                    goto cleanup;
                 }
                 cfg.max_length = (uint32_t)val_num;
                 if (cfg.min_length > cfg.max_length) cfg.min_length = cfg.max_length;
@@ -440,16 +523,19 @@ int main(int argc, char **argv) {
                 long val_num = strtol(val, NULL, 10);
                 if (val_num < 1 || val_num > 1000) {
                     fprintf(stderr, "Error: da_max_tries must be at least 1\n");
-                    return 1;
+                    goto cleanup;
                 }
                 cfg.da_max_tries = (uint32_t)val_num;
+                da_changed = true;
             } else if (strcasecmp(key, "da_recovery_time") == 0) {
                 cfg.da_recovery_time = (uint32_t)strtoul(val, NULL, 10);
+                da_changed = true;
             } else if (strcasecmp(key, "da_lockout_recovery") == 0) {
                 cfg.da_lockout_recovery = (uint32_t)strtoul(val, NULL, 10);
+                da_changed = true;
             } else {
                 fprintf(stderr, "Error: Unknown config key '%s'\n", key);
-                return 1;
+                goto cleanup;
             }
 
             if (tpm_pin_config_save(NULL, &cfg)) {
@@ -459,15 +545,33 @@ int main(int argc, char **argv) {
                         pam_manager_configure_arch_keyring_file("/etc/pam.d/system-local-login", cfg.enable_keyring_unlock);
                     }
                 }
+                if (da_changed) {
+                    ESYS_CONTEXT *ctx = NULL;
+                    if (tpm_engine_init(cfg.tcti_name, &ctx) == TSS2_RC_SUCCESS && ctx) {
+                        (void)tpm_engine_configure_da(ctx, cfg.da_max_tries, cfg.da_recovery_time, cfg.da_lockout_recovery);
+                        tpm_engine_destroy(&ctx);
+                    }
+                }
                 printf("Updated config: %s = %s\n", key, val);
-                return 0;
+                exit_code = 0;
+                goto cleanup;
             } else {
                 fprintf(stderr, "Failed to save configuration. Run with sudo/pkexec.\n");
-                return 1;
+                goto cleanup;
             }
         }
     }
 
     print_usage(argv[0]);
-    return 1;
+
+cleanup:
+    if (opt_pin_buf) {
+        tpm_pin_zero(opt_pin_buf, strlen(opt_pin_buf));
+        free(opt_pin_buf);
+    }
+    if (opt_pwd_buf) {
+        tpm_pin_zero(opt_pwd_buf, strlen(opt_pwd_buf));
+        free(opt_pwd_buf);
+    }
+    return exit_code;
 }

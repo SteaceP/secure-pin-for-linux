@@ -96,21 +96,22 @@ bool tpm_pin_is_service_enabled(const char *service, bool unprivileged_caller, c
         strcmp(service, "su") == 0 ||
         strcmp(service, "su-l") == 0 ||
         strcmp(service, "doas") == 0) {
+        if (unprivileged_caller) return false;
         return cfg->enable_sudo;
     }
 
     if (strcmp(service, "gdm-password") == 0) {
+        if (unprivileged_caller) return cfg->enable_lockscreen;
         return cfg->enable_login || cfg->enable_lockscreen;
     }
 
-    /* Unprivileged user-session screen lockers (e.g. COSMIC cosmic-greeter, swaylock fallback) invoke "login" */
-    if (strcmp(service, "login") == 0 && unprivileged_caller) {
-        return cfg->enable_lockscreen;
+    /* Unprivileged user-session screen lockers (e.g. COSMIC cosmic-greeter, swaylock fallback) invoke "login" or "cosmic-greeter" */
+    if (strcmp(service, "login") == 0 || strcmp(service, "cosmic-greeter") == 0) {
+        return unprivileged_caller ? cfg->enable_lockscreen : cfg->enable_login;
     }
 
     if (strcmp(service, "kde") == 0 ||
         strncmp(service, "kde-", 4) == 0 ||
-        strcmp(service, "cosmic-greeter") == 0 ||
         strstr(service, "screenlocker") != NULL ||
         strstr(service, "screensaver") != NULL ||
         strstr(service, "lock") != NULL ||
@@ -129,6 +130,7 @@ bool tpm_pin_is_service_enabled(const char *service, bool unprivileged_caller, c
         strstr(service, "sddm") != NULL ||
         strstr(service, "lightdm") != NULL ||
         strstr(service, "greeter") != NULL) {
+        if (unprivileged_caller) return false;
         return cfg->enable_login;
     }
 

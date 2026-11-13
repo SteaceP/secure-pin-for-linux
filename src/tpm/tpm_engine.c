@@ -139,7 +139,9 @@ TSS2_RC tpm_engine_init(const char *tcti_conf, ESYS_CONTEXT **esys_ctx) {
     *esys_ctx = NULL;
 
     /* Silence noisy default libtss2 stderr logs unless explicitly configured by caller */
-    setenv("TSS2_LOG", "all+NONE", 0);
+    if (getenv("TSS2_LOG") == NULL) {
+        setenv("TSS2_LOG", "all+NONE", 0);
+    }
 
     TSS2_TCTI_CONTEXT *tcti = NULL;
     TSS2_RC rc = init_tcti(tcti_conf, &tcti);
@@ -369,13 +371,14 @@ TSS2_RC tpm_engine_seal_key(ESYS_CONTEXT *ctx,
         NULL, TPM2_SE_HMAC, &sym_aes, TPM2_ALG_SHA256,
         &authSession
     );
-    if (s_rc == TSS2_RC_SUCCESS) {
-        Esys_TRSess_SetAttributes(ctx, authSession,
-            TPMA_SESSION_DECRYPT | TPMA_SESSION_ENCRYPT | TPMA_SESSION_CONTINUESESSION,
-            0xff);
-    } else {
-        authSession = ESYS_TR_PASSWORD;
+    if (s_rc != TSS2_RC_SUCCESS) {
+        tpm_pin_zero(&inSensitive, sizeof(inSensitive));
+        Esys_FlushContext(ctx, primaryHandle);
+        return s_rc;
     }
+    Esys_TRSess_SetAttributes(ctx, authSession,
+        TPMA_SESSION_DECRYPT | TPMA_SESSION_ENCRYPT | TPMA_SESSION_CONTINUESESSION,
+        0xff);
 
     rc = Esys_Create(
         ctx,
@@ -464,17 +467,6 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
             NULL, TPM2_SE_POLICY, &sym_aes, TPM2_ALG_SHA256,
             &policySession
         );
-        if (rc != TSS2_RC_SUCCESS) {
-            TPMT_SYM_DEF sym_null;
-            memset(&sym_null, 0, sizeof(sym_null));
-            sym_null.algorithm = TPM2_ALG_NULL;
-            rc = Esys_StartAuthSession(
-                ctx, ESYS_TR_NONE, ESYS_TR_NONE,
-                ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-                NULL, TPM2_SE_POLICY, &sym_null, TPM2_ALG_SHA256,
-                &policySession
-            );
-        }
 
         if (rc == TSS2_RC_SUCCESS) {
             Esys_TRSess_SetAttributes(ctx, policySession,
@@ -513,13 +505,15 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
             NULL, TPM2_SE_HMAC, &sym_aes, TPM2_ALG_SHA256,
             &authSession
         );
-        if (s_rc == TSS2_RC_SUCCESS) {
-            Esys_TRSess_SetAttributes(ctx, authSession,
-                TPMA_SESSION_DECRYPT | TPMA_SESSION_ENCRYPT | TPMA_SESSION_CONTINUESESSION,
-                0xff);
-        } else {
-            authSession = ESYS_TR_PASSWORD;
+        if (s_rc != TSS2_RC_SUCCESS) {
+            tpm_pin_zero(&authVal, sizeof(authVal));
+            Esys_FlushContext(ctx, itemHandle);
+            Esys_FlushContext(ctx, primaryHandle);
+            return s_rc;
         }
+        Esys_TRSess_SetAttributes(ctx, authSession,
+            TPMA_SESSION_DECRYPT | TPMA_SESSION_ENCRYPT | TPMA_SESSION_CONTINUESESSION,
+            0xff);
 
         rc = Esys_Unseal(
             ctx,
@@ -530,7 +524,7 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
             &outData
         );
 
-        if (authSession != ESYS_TR_PASSWORD && authSession != ESYS_TR_NONE) {
+        if (authSession != ESYS_TR_NONE) {
             Esys_FlushContext(ctx, authSession);
         }
     }

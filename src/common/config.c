@@ -43,6 +43,16 @@ static bool parse_bool(const char *val) {
             strcasecmp(val, "on") == 0);
 }
 
+static void strip_inline_comment(char *val) {
+    if (!val) return;
+    for (size_t i = 0; val[i] != '\0'; i++) {
+        if ((val[i] == '#' || val[i] == ';') && i > 0 && isspace((unsigned char)val[i - 1])) {
+            val[i] = '\0';
+            break;
+        }
+    }
+}
+
 bool tpm_pin_config_load(const char *path, tpm_pin_config_t *cfg) {
     if (!cfg) return false;
     tpm_pin_config_defaults(cfg);
@@ -56,6 +66,13 @@ bool tpm_pin_config_load(const char *path, tpm_pin_config_t *cfg) {
 
     char line[512];
     while (fgets(line, sizeof(line), f)) {
+        size_t line_len = strlen(line);
+        if (line_len > 0 && line[line_len - 1] != '\n' && !feof(f)) {
+            int ch;
+            while ((ch = fgetc(f)) != '\n' && ch != EOF) {
+                /* Discard overlong line remainder */
+            }
+        }
         char *p = trim(line);
         if (*p == '#' || *p == ';' || *p == '\0') continue;
 
@@ -64,12 +81,15 @@ bool tpm_pin_config_load(const char *path, tpm_pin_config_t *cfg) {
         *eq = '\0';
         char *key = trim(p);
         char *val = trim(eq + 1);
+        strip_inline_comment(val);
+        val = trim(val);
 
         if (strcasecmp(key, "digits_only") == 0) {
             cfg->digits_only = parse_bool(val);
         } else if (strcasecmp(key, "min_length") == 0) {
             cfg->min_length = (uint32_t)strtoul(val, NULL, 10);
             if (cfg->min_length < 4) cfg->min_length = 4;
+            if (cfg->min_length > TPM_PIN_MAX_PIN_LEN) cfg->min_length = TPM_PIN_MAX_PIN_LEN;
         } else if (strcasecmp(key, "max_length") == 0) {
             cfg->max_length = (uint32_t)strtoul(val, NULL, 10);
             if (cfg->max_length > TPM_PIN_MAX_PIN_LEN) cfg->max_length = TPM_PIN_MAX_PIN_LEN;
@@ -100,6 +120,7 @@ bool tpm_pin_config_load(const char *path, tpm_pin_config_t *cfg) {
     }
 
     if (cfg->min_length < 4) cfg->min_length = 4;
+    if (cfg->min_length > TPM_PIN_MAX_PIN_LEN) cfg->min_length = TPM_PIN_MAX_PIN_LEN;
     if (cfg->max_length > TPM_PIN_MAX_PIN_LEN) cfg->max_length = TPM_PIN_MAX_PIN_LEN;
     if (cfg->max_length < cfg->min_length) cfg->max_length = cfg->min_length;
     if (cfg->data_dir[0] != '/' || strstr(cfg->data_dir, "..") != NULL) {
@@ -116,6 +137,7 @@ bool tpm_pin_config_save(const char *path, const tpm_pin_config_t *cfg) {
 
     char tmp_path[512];
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", cfg_path, (int)getpid());
+    unlink(tmp_path);
 
     /* Ensure directory exists */
     char dir_path[512];
@@ -126,7 +148,7 @@ bool tpm_pin_config_save(const char *path, const tpm_pin_config_t *cfg) {
         mkdir(dir_path, 0755);
     }
 
-    int fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    int fd = open(tmp_path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
     if (fd < 0) return false;
 
     FILE *f = fdopen(fd, "w");
@@ -137,6 +159,7 @@ bool tpm_pin_config_save(const char *path, const tpm_pin_config_t *cfg) {
     }
 
     uint32_t min_len = cfg->min_length < 4 ? 4 : cfg->min_length;
+    if (min_len > TPM_PIN_MAX_PIN_LEN) min_len = TPM_PIN_MAX_PIN_LEN;
     uint32_t max_len = cfg->max_length > TPM_PIN_MAX_PIN_LEN ? TPM_PIN_MAX_PIN_LEN : cfg->max_length;
     if (max_len < min_len) max_len = min_len;
 
@@ -165,7 +188,7 @@ bool tpm_pin_config_save(const char *path, const tpm_pin_config_t *cfg) {
     }
     fprintf(f, "data_dir = %s\n", safe_data_dir);
 
-    if (ferror(f) || fflush(f) != 0 || fsync(fd) != 0) {
+    if (ferror(f) || fchmod(fd, 0644) != 0 || fflush(f) != 0 || fsync(fd) != 0) {
         fclose(f);
         unlink(tmp_path);
         return false;
@@ -176,7 +199,6 @@ bool tpm_pin_config_save(const char *path, const tpm_pin_config_t *cfg) {
         return false;
     }
 
-    chmod(tmp_path, 0644);
     if (rename(tmp_path, cfg_path) != 0) {
         unlink(tmp_path);
         return false;

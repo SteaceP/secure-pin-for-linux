@@ -97,7 +97,8 @@ static bool test_config_serialization(void) {
     cfg.enable_sudo = false;
     cfg.bind_pcr7 = true;
 
-    const char *tmp_conf = "/tmp/test_tpm_pin_config.conf";
+    char tmp_conf[256];
+    snprintf(tmp_conf, sizeof(tmp_conf), "/tmp/test_tpm_pin_config_%d.conf", (int)getpid());
     if (!tpm_pin_config_save(tmp_conf, &cfg)) return false;
 
     tpm_pin_config_t loaded;
@@ -112,6 +113,19 @@ static bool test_config_serialization(void) {
     if (loaded.max_length != 16) return false;
     if (loaded.enable_sudo != false) return false;
     if (loaded.bind_pcr7 != true) return false;
+
+    /* Test inline comments and min_length upper clamping */
+    FILE *cf = fopen(tmp_conf, "w");
+    if (!cf) return false;
+    fprintf(cf, "digits_only = true # inline comment\nmin_length = 100\nmax_length = 12\n");
+    fclose(cf);
+
+    bool ok_edge = tpm_pin_config_load(tmp_conf, &loaded);
+    unlink(tmp_conf);
+    if (!ok_edge) return false;
+    if (loaded.digits_only != true) return false;
+    if (loaded.min_length != TPM_PIN_MAX_PIN_LEN) return false;
+    if (loaded.max_length != TPM_PIN_MAX_PIN_LEN) return false;
 
     return true;
 }
@@ -162,11 +176,40 @@ static bool test_tpm_enroll_and_verify(void) {
 
     /* Verify that regular non-PIN password is rejected by policy filter without hitting TPM */
     if (tpm_pin_is_likely_pin("AlphaPassword123!", &cfg)) {
+        tpm_pin_remove_user(test_uid, &cfg);
+        return false;
+    }
+
+    /* Verify that copying sealed.blob to another UID fails due to UID AAD binding */
+    uid_t other_uid = test_uid + 1;
+    char src_blob[512], dst_dir[512], dst_blob[544];
+    snprintf(src_blob, sizeof(src_blob), "%s/%u/sealed.blob", cfg.data_dir, (unsigned int)test_uid);
+    snprintf(dst_dir, sizeof(dst_dir), "%s/%u", cfg.data_dir, (unsigned int)other_uid);
+    snprintf(dst_blob, sizeof(dst_blob), "%s/sealed.blob", dst_dir);
+    mkdir(dst_dir, 0755);
+    FILE *sf = fopen(src_blob, "rb");
+    FILE *df = fopen(dst_blob, "wb");
+    if (sf && df) {
+        uint8_t buf[4096];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), sf)) > 0) {
+            fwrite(buf, 1, n, df);
+        }
+    }
+    if (sf) fclose(sf);
+    if (df) fclose(df);
+    chmod(dst_blob, 0600);
+
+    bool cross_uid_ok = tpm_pin_verify_user(other_uid, test_pin, &cfg, unsealed, sizeof(unsealed), &tpm_rc);
+    tpm_pin_remove_user(other_uid, &cfg);
+    if (cross_uid_ok) {
+        tpm_pin_remove_user(test_uid, &cfg);
         return false;
     }
 
     /* Cleanup */
     tpm_pin_remove_user(test_uid, &cfg);
+    rmdir(cfg.data_dir);
     return true;
 }
 
@@ -398,7 +441,7 @@ static bool test_arch_distro_and_pam_stack(void) {
     }
     unlink(sysauth_path);
 
-    /* Test Arch system-local-login keyring auto-unlock block */
+    /* Test Arch system-local-login keyring auto-unlock block (via symlink to verify symlink preservation) */
     const char *arch_local_login =
         "#%PAM-1.0\n"
         "\n"
@@ -407,10 +450,26 @@ static bool test_arch_distro_and_pam_stack(void) {
         "password  include   system-login\n"
         "session   include   system-login\n";
 
-    if (!write_whole_file(local_login_path, arch_local_login)) return false;
+    char local_login_link[256];
+    snprintf(local_login_link, sizeof(local_login_link), "/tmp/test_system_local_login_link_%d", pid);
+    unlink(local_login_link);
 
-    if (!pam_manager_configure_arch_keyring_file(local_login_path, true) ||
-        !pam_manager_configure_arch_keyring_file(local_login_path, true)) {
+    if (!write_whole_file(local_login_path, arch_local_login)) return false;
+    if (symlink(local_login_path, local_login_link) != 0) {
+        unlink(local_login_path);
+        return false;
+    }
+
+    if (!pam_manager_configure_arch_keyring_file(local_login_link, true) ||
+        !pam_manager_configure_arch_keyring_file(local_login_link, true)) {
+        unlink(local_login_link);
+        unlink(local_login_path);
+        return false;
+    }
+
+    struct stat lkst;
+    if (lstat(local_login_link, &lkst) != 0 || !S_ISLNK(lkst.st_mode)) {
+        unlink(local_login_link);
         unlink(local_login_path);
         return false;
     }
@@ -419,17 +478,26 @@ static bool test_arch_distro_and_pam_stack(void) {
         !strstr(updated, "-auth      optional   pam_gnome_keyring.so") ||
         !strstr(updated, "-session   optional   pam_gnome_keyring.so auto_start") ||
         !strstr(updated, "-session   optional   pam_kwallet5.so auto_start")) {
+        unlink(local_login_link);
         unlink(local_login_path);
         return false;
     }
 
-    if (!pam_manager_configure_arch_keyring_file(local_login_path, false) ||
+    if (!pam_manager_configure_arch_keyring_file(local_login_link, false) ||
         !read_whole_file(local_login_path, updated, sizeof(updated)) ||
         strcmp(updated, arch_local_login) != 0) {
+        unlink(local_login_link);
         unlink(local_login_path);
         return false;
     }
 
+    if (lstat(local_login_link, &lkst) != 0 || !S_ISLNK(lkst.st_mode)) {
+        unlink(local_login_link);
+        unlink(local_login_path);
+        return false;
+    }
+
+    unlink(local_login_link);
     unlink(local_login_path);
     return true;
 }
@@ -609,9 +677,11 @@ static bool test_pam_service_allowlist(void) {
     if (!tpm_pin_is_service_enabled("gdm-password", false, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("ly", false, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("login", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("cosmic-greeter", false, &cfg)) return false;
 
-    /* Unprivileged cosmic-greeter lock screen uses PAM service "login" with euid != 0 -> enable_lockscreen */
+    /* Unprivileged cosmic-greeter lock screen uses PAM service "login" or "cosmic-greeter" with euid != 0 -> enable_lockscreen */
     if (tpm_pin_is_service_enabled("login", true, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("cosmic-greeter", true, &cfg)) return false;
     if (tpm_pin_is_service_enabled("kde", true, &cfg)) return false;
     if (tpm_pin_is_service_enabled("hyprlock", true, &cfg)) return false;
     if (tpm_pin_is_service_enabled("xfce4-screensaver", true, &cfg)) return false;
@@ -620,15 +690,17 @@ static bool test_pam_service_allowlist(void) {
     cfg.enable_lockscreen = true;
     if (tpm_pin_is_service_enabled("greetd", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("login", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("cosmic-greeter", false, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("login", true, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("cosmic-greeter", true, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("kde", true, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("hyprlock", true, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("polkit-1", false, &cfg)) return false;
 
-    /* Sudo / doas / su-l follow enable_sudo */
+    /* Sudo / doas / su-l follow enable_sudo and must reject unprivileged spoofing */
     cfg.enable_sudo = true;
     if (!tpm_pin_is_service_enabled("sudo", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("sudo", true, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("doas", false, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("su-l", false, &cfg)) return false;
     cfg.enable_sudo = false;
