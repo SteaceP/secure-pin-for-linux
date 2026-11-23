@@ -15,9 +15,13 @@ class SecurePinToggle extends QuickToggle {
 
         this.connect('clicked', () => {
             try {
-                Gio.AppInfo.create_from_commandline('tpm-pin-settings', 'Secure PIN', 0).launch([], null);
+                let appInfo = Gio.DesktopAppInfo.new('io.github.securepin.Settings.desktop');
+                if (!appInfo) {
+                    appInfo = Gio.AppInfo.create_from_commandline('tpm-pin-settings', 'Secure PIN', 0);
+                }
+                appInfo.launch([], null);
             } catch (e) {
-                console.error('Failed to launch tpm-pin-settings:', e);
+                console.error('Failed to launch Secure PIN Settings:', e);
             }
         });
     }
@@ -32,8 +36,11 @@ export default class SecurePinExtension extends Extension {
     }
 
     disable() {
-        this._indicator?.destroy();
-        this._indicator = null;
+        if (this._indicator) {
+            this._indicator.quickSettingsItems.forEach(item => item.destroy());
+            this._indicator.destroy();
+            this._indicator = null;
+        }
         this._toggle = null;
     }
 }

@@ -4,6 +4,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <limits.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include "tpm_pin.h"
@@ -19,7 +21,7 @@ void tpm_pin_zero(void *ptr, size_t size) {
 }
 
 bool tpm_pin_random_bytes(uint8_t *buf, size_t len) {
-    if (!buf || len == 0) return false;
+    if (!buf || len == 0 || len > (size_t)INT_MAX) return false;
     if (RAND_bytes(buf, (int)len) == 1) {
         return true;
     }
@@ -28,7 +30,12 @@ bool tpm_pin_random_bytes(uint8_t *buf, size_t len) {
     size_t total = 0;
     while (total < len) {
         ssize_t n = read(fd, buf + total, len - total);
-        if (n <= 0) {
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            close(fd);
+            return false;
+        }
+        if (n == 0) {
             close(fd);
             return false;
         }
@@ -39,9 +46,13 @@ bool tpm_pin_random_bytes(uint8_t *buf, size_t len) {
 }
 
 bool tpm_pin_derive_auth(const char *pin, const uint8_t *salt, size_t salt_len, uint8_t *out_auth, size_t auth_len) {
-    if (!pin || !salt || !out_auth) return false;
+    if (!pin || !salt || !out_auth || salt_len == 0 || auth_len == 0) return false;
+    size_t pin_len = strlen(pin);
+    if (pin_len > (size_t)INT_MAX || salt_len > (size_t)INT_MAX || auth_len > (size_t)INT_MAX) {
+        return false;
+    }
     int ret = PKCS5_PBKDF2_HMAC(
-        pin, (int)strlen(pin),
+        pin, (int)pin_len,
         salt, (int)salt_len,
         100000,
         EVP_sha256(),
@@ -56,6 +67,8 @@ bool tpm_pin_encrypt_aad(const uint8_t *key, const uint8_t *iv,
                          const uint8_t *plaintext, size_t pt_len,
                          uint8_t *ciphertext, uint8_t *tag) {
     if (!key || !iv || !plaintext || !ciphertext || !tag) return false;
+
+    if (aad_len > (size_t)INT_MAX || pt_len > (size_t)INT_MAX) return false;
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx) return false;
@@ -92,6 +105,7 @@ bool tpm_pin_decrypt_aad(const uint8_t *key, const uint8_t *iv,
                          const uint8_t *ciphertext, size_t ct_len,
                          const uint8_t *tag, uint8_t *plaintext) {
     if (!key || !iv || !ciphertext || !tag || !plaintext) return false;
+    if (aad_len > (size_t)INT_MAX || ct_len > (size_t)INT_MAX) return false;
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx) return false;
@@ -123,6 +137,9 @@ bool tpm_pin_decrypt_aad(const uint8_t *key, const uint8_t *iv,
     ok = true;
 
 cleanup:
+    if (!ok && ct_len > 0) {
+        tpm_pin_zero(plaintext, ct_len);
+    }
     EVP_CIPHER_CTX_free(ctx);
     return ok;
 }

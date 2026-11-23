@@ -1,3 +1,13 @@
+tpm-pin (1.0.8-1) unstable; urgency=high
+
+  * Remove unprivileged udev uaccess rule on /dev/tpmrm* and enforce root privileges for DA reset/config and PAM management.
+  * Fix GUI PIN enrollment stdin confirmation mismatch, run helper commands asynchronously, and harden Pango/UTF-8/ASCII validation.
+  * Marshal TPM2B_PRIVATE and TPM2B_PUBLIC canonically via libtss2-mu (blob v2), enforce root ownership on /var/lib/tpm-pin directories, and fix PCR 7 policy return code matching.
+  * Harden PAM module (PAM_RHOST check, MT-safe env, stricter service allowlist & Polkit sudo gating, sufficient->success=done rule insertion), CLI validation, and setuid helper hygiene.
+  * Fix Debian dh_fixperms stripping setuid on tpm-pin-verify, clean up uninstall hooks (--uninstall), and fix GNOME extension cleanup/Flatpak launch.
+
+ -- Secure PIN Maintainers <steace@coderage.pro>  Mon, 23 Nov 2026 15:35:00 -0500
+
 tpm-pin (1.0.7-1) unstable; urgency=high
 
   * Bind sealed blob headers and UID into AES-256-GCM AAD and enforce 0600 root-only sealed.blob ownership with sealed.meta status file.

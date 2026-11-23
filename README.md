@@ -64,16 +64,9 @@ It integrates with **PAM** (login screen, lock screen, `sudo`, and Polkit), auto
 
   *(Optional: install `gnome-keyring` on GNOME/COSMIC or `kwallet-pam` on KDE Plasma for automatic login keyring unlocking).*
 
-- **TPM 2.0 User Permissions (`tss` group)**:
+- **TPM 2.0 Security & Permissions**:
 
-  To query TPM status or run CLI commands as a non-root user, ensure your account is in the `tss` group:
-
-  ```bash
-  sudo usermod -aG tss $USER
-  newgrp tss # or log out and log back in
-  ```
-
-  *(Note: Installing `.deb`, `.rpm`, or Arch packages automatically configures a `uaccess` udev rule for desktop sessions).*
+  Direct write access to `/dev/tpmrm0` is intentionally restricted to `root` so unprivileged processes cannot tamper with hardware Dictionary Attack (DA) lockout settings or clear the TPM. Unprivileged lock screens authenticate through the setuid-root `tpm-pin-verify` helper, and administrative actions (`enroll`, `remove`, `pam enable/disable`, `config set`) elevate via `sudo` or `pkexec` (Polkit).
 
 Alternatively, you can build and install manually with CMake:
 

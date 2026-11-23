@@ -1,5 +1,5 @@
 Name:           tpm-pin
-Version:        1.0.7
+Version:        1.0.8
 Release:        1%{?dist}
 Summary:        Windows Hello-style TPM 2.0 PIN authentication for Linux
 
@@ -38,6 +38,17 @@ mkdir -p %{buildroot}%{_sysconfdir}/tpm-pin
 rm -rf %{buildroot}%{_datadir}/pam-configs
 
 %post
+rm -f /etc/udev/rules.d/70-tpm-pin.rules
+if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload >/dev/null 2>&1 || :
+    udevadm trigger --action=change --subsystem-match=tpmrm >/dev/null 2>&1 || :
+fi
+if command -v systemd-tmpfiles >/dev/null 2>&1; then
+    systemd-tmpfiles --create %{_prefix}/lib/tmpfiles.d/tpm-pin.conf >/dev/null 2>&1 || :
+fi
+if [ -d %{_sharedstatedir}/tpm-pin ]; then
+    find %{_sharedstatedir}/tpm-pin -maxdepth 2 -type d -exec chown 0:0 {} + 2>/dev/null || :
+fi
 if [ $1 -eq 1 ]; then
     # Initial installation
     if [ -x %{_bindir}/tpm-pin-ctl ]; then
@@ -49,7 +60,7 @@ fi
 if [ $1 -eq 0 ]; then
     # Package is being uninstalled, not upgraded
     if [ -x %{_bindir}/tpm-pin-ctl ]; then
-        %{_bindir}/tpm-pin-ctl pam disable >/dev/null 2>&1 || :
+        %{_bindir}/tpm-pin-ctl pam disable --uninstall >/dev/null 2>&1 || :
     fi
 fi
 
@@ -64,13 +75,19 @@ fi
 %{_datadir}/icons/hicolor/*/apps/*
 %{_datadir}/metainfo/io.github.securepin.Settings.metainfo.xml
 %{_datadir}/polkit-1/actions/io.github.securepin.policy
-%{_prefix}/lib/udev/rules.d/70-tpm-pin.rules
 %{_prefix}/lib/systemd/system/polkit-agent-helper@.service.d/50-tpm-pin.conf
 %{_prefix}/lib/tmpfiles.d/tpm-pin.conf
 %dir %attr(0755,root,root) %{_sharedstatedir}/tpm-pin
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 
 %changelog
+* Mon Nov 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.8-1
+- Remove unprivileged udev uaccess rule on /dev/tpmrm* and require root for DA reset/config
+- Fix GUI PIN enrollment stdin protocol regression and make GUI CLI execution asynchronous
+- Canonicalize sealed blob serialization via libtss2-mu (v2), enforce root-owned directories, and fix PCR 7 policy RC matching
+- Harden PAM module (PAM_RHOST check, thread-safe env, service allowlist/Polkit scope, sufficient->success=done), CLI, and setuid verify helper
+- Fix packaging uninstall /dev/null mask leaks, Debian dh_fixperms setuid stripping, and GNOME extension cleanup
+
 * Fri Nov 13 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.7-1
 - Bind sealed blob headers and UID into AES-256-GCM AAD and enforce 0600 root-only sealed.blob with sealed.meta status file
 - Remove cleartext ESYS_TR_PASSWORD and broken TPM2_ALG_NULL fallbacks during TPM sealing/unsealing

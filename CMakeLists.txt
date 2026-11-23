@@ -1,6 +1,6 @@
 
 cmake_minimum_required(VERSION 3.16)
-project(tpm-pin VERSION 1.0.7 LANGUAGES C)
+project(tpm-pin VERSION 1.0.8 LANGUAGES C)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 17)
@@ -63,6 +63,13 @@ if(NOT BUILD_GUI_ONLY)
         message(FATAL_ERROR "Could not find TSS2 ESYS library (libtss2-esys.so or libtss2-esys.so.0)")
     endif()
 
+    find_library(TSS2_MU_LIB NAMES tss2-mu libtss2-mu.so.0 tss2-mu.so.0
+        PATHS /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE} /usr/lib64 /usr/lib /usr/local/lib
+    )
+    if(NOT TSS2_MU_LIB)
+        message(FATAL_ERROR "Could not find TSS2 MU library (libtss2-mu.so or libtss2-mu.so.0)")
+    endif()
+
     find_library(TSS2_TCTI_DEV_LIB NAMES tss2-tcti-device libtss2-tcti-device.so.0
         PATHS /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE} /usr/lib64 /usr/lib /usr/local/lib
     )
@@ -75,7 +82,7 @@ if(NOT BUILD_GUI_ONLY)
         PATHS /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE} /usr/lib64 /usr/lib /usr/local/lib
     )
 
-    set(TSS2_LIBS ${TSS2_ESYS_LIB})
+    set(TSS2_LIBS ${TSS2_ESYS_LIB} ${TSS2_MU_LIB})
     if(TSS2_TCTI_DEV_LIB)
         list(APPEND TSS2_LIBS ${TSS2_TCTI_DEV_LIB})
     endif()
@@ -161,11 +168,6 @@ if(NOT BUILD_GUI_ONLY)
         )
     endif()
 
-    set(UDEV_RULES_DIR "lib/udev/rules.d" CACHE PATH "Directory for udev rules")
-    install(FILES packaging/udev/70-tpm-pin.rules
-        DESTINATION ${UDEV_RULES_DIR}
-    )
-
     set(SYSTEMD_UNIT_DIR "lib/systemd/system" CACHE PATH "Directory for systemd units")
     install(FILES packaging/systemd/polkit-agent-helper-tpm-pin.conf
         DESTINATION ${SYSTEMD_UNIT_DIR}/polkit-agent-helper@.service.d
@@ -229,7 +231,7 @@ if(NOT BUILD_GUI_ONLY)
         set(CPACK_DEBIAN_PACKAGE_DEPENDS "libpam0g, python3, python3-gi, gir1.2-adw-1, gir1.2-gtk-4.0")
     else()
         set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
-        set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6, libpam0g, libssl3t64 | libssl3, libtss2-esys-3.0.2-0t64 | libtss2-esys-3.0.2-0, python3, python3-gi, gir1.2-adw-1, gir1.2-gtk-4.0")
+        set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6, libpam0g, libssl3t64 | libssl3, libtss2-esys-3.0.2-0t64 | libtss2-esys-3.0.2-0, libtss2-mu0t64 | libtss2-mu0, python3, python3-gi, gir1.2-adw-1, gir1.2-gtk-4.0")
     endif()
     set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
         "${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postinst;${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/prerm;${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postrm"
@@ -250,8 +252,6 @@ if(NOT BUILD_GUI_ONLY)
         /usr/lib64/security
         /usr/libexec
         /usr/lib/tmpfiles.d
-        /usr/lib/udev
-        /usr/lib/udev/rules.d
         /usr/lib/systemd
         /usr/lib/systemd/system
         /usr/lib/systemd/system/polkit-agent-helper@.service.d

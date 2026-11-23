@@ -1,3 +1,14 @@
+rm -f /etc/udev/rules.d/70-tpm-pin.rules
+if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload >/dev/null 2>&1 || :
+    udevadm trigger --action=change --subsystem-match=tpmrm >/dev/null 2>&1 || :
+fi
+if command -v systemd-tmpfiles >/dev/null 2>&1; then
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/tpm-pin.conf >/dev/null 2>&1 || :
+fi
+if [ -d /var/lib/tpm-pin ]; then
+    find /var/lib/tpm-pin -maxdepth 2 -type d -exec chown 0:0 {} + 2>/dev/null || :
+fi
 if [ $1 -eq 1 ]; then
     if [ ! -f /usr/lib64/security/pam_tpm_pin.so ] && [ -f /usr/lib/x86_64-linux-gnu/security/pam_tpm_pin.so ]; then
         mkdir -p /usr/lib64/security

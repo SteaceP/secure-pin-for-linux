@@ -22,7 +22,7 @@ extern "C" {
 #define TPM_PIN_DEFAULT_CONFIG_PATH "/etc/tpm-pin/config.conf"
 #define TPM_PIN_DEFAULT_DATA_DIR    "/var/lib/tpm-pin"
 #define TPM_PIN_MAGIC               0x54504D50  /* "TPMP" */
-#define TPM_PIN_VERSION             1
+#define TPM_PIN_VERSION             2
 
 #define TPM_PIN_SALT_LEN            32
 #define TPM_PIN_IV_LEN              12
@@ -144,12 +144,23 @@ bool tpm_pin_remove_user(uid_t uid, const tpm_pin_config_t *cfg);
 bool tpm_pin_user_is_enrolled(uid_t uid, const tpm_pin_config_t *cfg);
 bool tpm_pin_get_user_status(uid_t uid, const tpm_pin_config_t *cfg, tpm_pin_status_t *status);
 
+/* TPM Return Code Helpers */
+static inline bool tpm_pin_rc_is_lockout(uint32_t rc) {
+    return (rc & 0xFFFU) == (TPM2_RC_LOCKOUT & 0xFFFU);
+}
+
+static inline bool tpm_pin_rc_is_policy_fail(uint32_t rc) {
+    return (((rc & 0x80U) != 0U) && ((rc & 0xBFU) == (TPM2_RC_POLICY_FAIL & 0xBFU))) ||
+           ((rc & 0xFFFU) == 0x127U);
+}
+
 /* Distro PAM Configuration Manager */
 linux_distro_t pam_manager_detect_distro(void);
 linux_distro_t pam_manager_detect_distro_from_file(const char *os_release_path);
 const char    *pam_manager_distro_name(linux_distro_t distro);
 bool           pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_len);
 bool           pam_manager_disable(char *err_buf, size_t err_len);
+bool           pam_manager_disable_ex(bool uninstall_mode, char *err_buf, size_t err_len);
 bool           pam_manager_is_enabled(void);
 bool           pam_manager_apply_auth_file(const char *filepath);
 bool           pam_manager_apply_fedora_file(const char *filepath);

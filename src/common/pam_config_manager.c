@@ -52,7 +52,7 @@ static linux_distro_t match_distro_token(const char *val) {
 
 linux_distro_t pam_manager_detect_distro_from_file(const char *os_release_path) {
     const char *path = os_release_path ? os_release_path : "/etc/os-release";
-    FILE *f = fopen(path, "r");
+    FILE *f = fopen(path, "re");
     if (!f) return DISTRO_GENERIC;
 
     char line[256];
@@ -111,7 +111,7 @@ static bool is_auth_rule_line(const char *line) {
 }
 
 static bool file_contains_auth_module(const char *filepath, const char *module_name) {
-    FILE *f = fopen(filepath, "r");
+    FILE *f = fopen(filepath, "re");
     if (!f) return false;
     char line[1024];
     bool found = false;
@@ -243,7 +243,7 @@ static bool authselect_get_current_state(char *profile_out, size_t prof_sz, char
             if (profile_out) snprintf(profile_out, prof_sz, "%s", p);
             first = false;
         } else {
-            if (features_out) {
+            if (features_out && feat_sz > 0) {
                 if (features_out[0] != '\0') strncat(features_out, " ", feat_sz - strlen(features_out) - 1);
                 strncat(features_out, p, feat_sz - strlen(features_out) - 1);
             }
@@ -316,7 +316,9 @@ static bool create_backup(const char *filepath, char *backup_out, size_t backup_
         }
     }
     fclose(src);
-    if (fchmod(dst_fd, orig_mode) != 0 || fflush(dst) != 0 || fsync(dst_fd) != 0 || fclose(dst) != 0) {
+    bool write_ok = (!ferror(dst) && fchmod(dst_fd, orig_mode) == 0 && fflush(dst) == 0 && fsync(dst_fd) == 0);
+    if (fclose(dst) != 0) write_ok = false;
+    if (!write_ok) {
         unlink(backup_out);
         return false;
     }
@@ -358,6 +360,29 @@ static int pam_control_jump(const char *line, const char *key) {
         if (n > best && n < 1000) best = (int)n;
     }
     return best;
+}
+
+static bool is_sufficient_or_done_rule(const char *line) {
+    const char *ctl = line ? pam_control_field(line) : NULL;
+    if (!ctl) return false;
+    if (strncmp(ctl, "sufficient", 10) == 0 &&
+        (ctl[10] == ' ' || ctl[10] == '\t' || ctl[10] == '\n' || ctl[10] == '\0')) {
+        return true;
+    }
+    if (*ctl == '[') {
+        const char *end = strchr(ctl, ']');
+        if (end) {
+            for (const char *p = ctl + 1; p < end; ) {
+                while (p < end && (*p == ' ' || *p == '\t')) p++;
+                const char *tok = p;
+                while (p < end && *p != ' ' && *p != '\t') p++;
+                if ((size_t)(p - tok) == 12 && strncmp(tok, "success=done", 12) == 0) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 static void free_lines(char **lines, size_t count) {
@@ -465,6 +490,10 @@ static bool insert_pam_rule(const char *filepath, const char *rule, const char *
             snprintf(rule_buf, sizeof(rule_buf),
                      "auth\t[success=%d authinfo_unavail=ignore open_err=ignore default=ignore]\tpam_tpm_pin.so",
                      jump);
+            rule_out = rule_buf;
+        } else if (anchor_jump == 0 && is_sufficient_or_done_rule(lines[anchor])) {
+            snprintf(rule_buf, sizeof(rule_buf),
+                     "auth\t[success=done authinfo_unavail=ignore open_err=ignore default=ignore]\tpam_tpm_pin.so");
             rule_out = rule_buf;
         }
     }
@@ -755,15 +784,16 @@ bool pam_manager_configure_arch_keyring_file(const char *filepath, bool enable) 
     return true;
 }
 
-static bool configure_polkit_and_udev_overrides(bool enable) {
+static bool configure_polkit_and_udev_overrides(bool enable, bool uninstall_mode) {
+    if (geteuid() != 0) return false;
+
     const char *dropin_dir = "/etc/systemd/system/polkit-agent-helper@.service.d";
     const char *dropin_file = "/etc/systemd/system/polkit-agent-helper@.service.d/tpm-pin.conf";
     const char *mask_dropin_file = "/etc/systemd/system/polkit-agent-helper@.service.d/50-tpm-pin.conf";
     const char *etc_udev_rule = "/etc/udev/rules.d/70-tpm-pin.rules";
     bool pkg_dropin_exists = (access("/usr/lib/systemd/system/polkit-agent-helper@.service.d/50-tpm-pin.conf", F_OK) == 0 ||
                               access("/lib/systemd/system/polkit-agent-helper@.service.d/50-tpm-pin.conf", F_OK) == 0);
-    bool pkg_udev_exists = (access("/usr/lib/udev/rules.d/70-tpm-pin.rules", F_OK) == 0 ||
-                            access("/lib/udev/rules.d/70-tpm-pin.rules", F_OK) == 0);
+    bool udev_removed = (unlink(etc_udev_rule) == 0);
 
     if (enable) {
         mkdir("/etc/systemd", 0755);
@@ -777,56 +807,38 @@ static bool configure_polkit_and_udev_overrides(bool enable) {
 
         /* Clear any prior /dev/null masks created on disable */
         unlink(mask_dropin_file);
-        unlink(dropin_file);
-        unlink(etc_udev_rule);
 
-        int dfd = open(dropin_file, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+        char tmp_dropin[512];
+        snprintf(tmp_dropin, sizeof(tmp_dropin), "%s.tmp.%d", dropin_file, (int)getpid());
+        unlink(tmp_dropin);
+
+        int dfd = open(tmp_dropin, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
         if (dfd < 0) return false;
         FILE *f = fdopen(dfd, "we");
         if (!f) {
             close(dfd);
-            unlink(dropin_file);
+            unlink(tmp_dropin);
             return false;
         }
 
         fprintf(f, "[Service]\n"
                    "PrivateDevices=no\n"
+                   "DevicePolicy=closed\n"
                    "DeviceAllow=/dev/tpmrm0 rw\n"
                    "DeviceAllow=/dev/tpm0 rw\n"
                    "DeviceAllow=char-tpm rw\n"
                    "StandardError=journal\n");
-        if (fchmod(dfd, 0644) != 0 || fflush(f) != 0 || fsync(dfd) != 0 || fclose(f) != 0) {
-            unlink(dropin_file);
+        bool write_ok = (!ferror(f) && fchmod(dfd, 0644) == 0 && fflush(f) == 0 && fsync(dfd) == 0);
+        if (fclose(f) != 0) write_ok = false;
+        if (!write_ok || rename(tmp_dropin, dropin_file) != 0) {
+            unlink(tmp_dropin);
             return false;
         }
-
-        /* Ensure uaccess udev rule exists even when running from a source build */
-        if (!pkg_udev_exists) {
-            mkdir("/etc/udev", 0755);
-            chmod("/etc/udev", 0755);
-            mkdir("/etc/udev/rules.d", 0755);
-            chmod("/etc/udev/rules.d", 0755);
-            int ufd = open(etc_udev_rule, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
-            if (ufd >= 0) {
-                FILE *uf = fdopen(ufd, "we");
-                if (uf) {
-                    fprintf(uf, "# Managed by tpm-pin\n"
-                                "KERNEL==\"tpmrm[0-9]*\", TAG+=\"uaccess\"\n");
-                    if (fchmod(ufd, 0644) != 0 || fflush(uf) != 0 || fsync(ufd) != 0 || fclose(uf) != 0) {
-                        unlink(etc_udev_rule);
-                    }
-                } else {
-                    close(ufd);
-                    unlink(etc_udev_rule);
-                }
-            }
-        }
-        run_restorecon(etc_udev_rule);
         run_restorecon(dropin_file);
     } else {
         unlink(dropin_file);
         unlink(mask_dropin_file);
-        if (pkg_dropin_exists) {
+        if (!uninstall_mode && pkg_dropin_exists) {
             /* Package-installed drop-in in /usr/lib must be masked via /etc symlink to /dev/null */
             mkdir("/etc/systemd", 0755);
             chmod("/etc/systemd", 0755);
@@ -841,18 +853,6 @@ static bool configure_polkit_and_udev_overrides(bool enable) {
         } else {
             rmdir(dropin_dir);
         }
-
-        unlink(etc_udev_rule);
-        if (pkg_udev_exists) {
-            /* Package-installed udev rule in /usr/lib must be masked via /etc symlink to /dev/null */
-            mkdir("/etc/udev", 0755);
-            chmod("/etc/udev", 0755);
-            mkdir("/etc/udev/rules.d", 0755);
-            chmod("/etc/udev/rules.d", 0755);
-            if (symlink("/dev/null", etc_udev_rule) == 0) {
-                run_restorecon(etc_udev_rule);
-            }
-        }
     }
 
     const char *systemctl_bin = (access("/usr/bin/systemctl", X_OK) == 0) ? "/usr/bin/systemctl"
@@ -862,13 +862,15 @@ static bool configure_polkit_and_udev_overrides(bool enable) {
         (void)run_argv(argv);
     }
 
-    const char *udevadm_bin = (access("/usr/bin/udevadm", X_OK) == 0) ? "/usr/bin/udevadm"
-                            : (access("/bin/udevadm", X_OK) == 0) ? "/bin/udevadm" : NULL;
-    if (udevadm_bin) {
-        const char *reload_argv[] = { udevadm_bin, "control", "--reload", NULL };
-        if (run_argv(reload_argv) == 0) {
-            const char *trig_argv[] = { udevadm_bin, "trigger", "--action=change", "--subsystem-match=tpmrm", NULL };
-            (void)run_argv(trig_argv);
+    if (udev_removed) {
+        const char *udevadm_bin = (access("/usr/bin/udevadm", X_OK) == 0) ? "/usr/bin/udevadm"
+                                : (access("/bin/udevadm", X_OK) == 0) ? "/bin/udevadm" : NULL;
+        if (udevadm_bin) {
+            const char *reload_argv[] = { udevadm_bin, "control", "--reload", NULL };
+            if (run_argv(reload_argv) == 0) {
+                const char *trig_argv[] = { udevadm_bin, "trigger", "--action=change", "--subsystem-match=tpmrm", NULL };
+                (void)run_argv(trig_argv);
+            }
         }
     }
     return true;
@@ -909,7 +911,9 @@ static bool write_profile_state_file(const char *path, const char *content) {
         return false;
     }
     fprintf(f, "%s\n", content);
-    if (fchmod(fd, 0644) != 0 || fflush(f) != 0 || fsync(fd) != 0 || fclose(f) != 0) {
+    bool write_ok = (!ferror(f) && fchmod(fd, 0644) == 0 && fflush(f) == 0 && fsync(fd) == 0);
+    if (fclose(f) != 0) write_ok = false;
+    if (!write_ok) {
         unlink(path);
         return false;
     }
@@ -1061,6 +1065,13 @@ static bool authselect_disable(void) {
 }
 
 bool pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_len) {
+    if (geteuid() != 0) {
+        if (err_buf && err_len > 0) {
+            snprintf(err_buf, err_len, "Root privileges required to modify PAM configuration. Run with sudo/pkexec.");
+        }
+        return false;
+    }
+
     linux_distro_t distro = pam_manager_detect_distro();
     bool enabled = false;
 
@@ -1083,14 +1094,19 @@ bool pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_l
             enabled = authselect_enable(want_keyring);
         }
         if (!enabled) {
+            bool any_applied = false;
             bool ok = true;
             if (faccessat(AT_FDCWD, "/etc/pam.d/system-auth", W_OK, AT_EACCESS) == 0) {
-                ok = pam_manager_apply_fedora_file("/etc/pam.d/system-auth");
+                bool r = pam_manager_apply_fedora_file("/etc/pam.d/system-auth");
+                any_applied = any_applied || r;
+                ok = ok && r;
             }
             if (faccessat(AT_FDCWD, "/etc/pam.d/password-auth", W_OK, AT_EACCESS) == 0) {
-                ok = ok && pam_manager_apply_fedora_file("/etc/pam.d/password-auth");
+                bool r = pam_manager_apply_fedora_file("/etc/pam.d/password-auth");
+                any_applied = any_applied || r;
+                ok = ok && r;
             }
-            enabled = ok;
+            enabled = any_applied && ok;
         }
     } else if (distro == DISTRO_OPENSUSE) {
         if (faccessat(AT_FDCWD, "/etc/pam.d/common-auth", W_OK, AT_EACCESS) == 0) {
@@ -1108,7 +1124,7 @@ bool pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_l
     }
 
     if (enabled) {
-        configure_polkit_and_udev_overrides(true);
+        configure_polkit_and_udev_overrides(true, false);
         return true;
     }
 
@@ -1118,36 +1134,49 @@ bool pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_l
     return false;
 }
 
-bool pam_manager_disable(char *err_buf, size_t err_len) {
+bool pam_manager_disable_ex(bool uninstall_mode, char *err_buf, size_t err_len) {
+    if (geteuid() != 0) {
+        if (err_buf && err_len > 0) {
+            snprintf(err_buf, err_len, "Root privileges required to modify PAM configuration. Run with sudo/pkexec.");
+        }
+        return false;
+    }
+
     linux_distro_t distro = pam_manager_detect_distro();
+    bool ok = true;
 
     if (distro == DISTRO_DEBIAN_UBUNTU) {
         if (access("/usr/share/pam-configs/tpm-pin", R_OK) == 0 && access("/usr/sbin/pam-auth-update", X_OK) == 0) {
             const char *argv[] = { "/usr/sbin/pam-auth-update", "--package", "--remove", "tpm-pin", NULL };
-            (void)run_argv(argv);
+            if (run_argv(argv) != 0) ok = false;
         }
-        if (faccessat(AT_FDCWD, "/etc/pam.d/common-auth", W_OK, AT_EACCESS) == 0) {
-            pam_manager_remove_from_file("/etc/pam.d/common-auth");
+        if (access("/etc/pam.d/common-auth", F_OK) == 0) {
+            if (!pam_manager_remove_from_file("/etc/pam.d/common-auth")) ok = false;
         }
     }
 
     if (distro == DISTRO_FEDORA_RHEL && authselect_is_active()) {
-        authselect_disable();
+        if (!authselect_disable()) ok = false;
     }
 
-    if (faccessat(AT_FDCWD, "/etc/pam.d/system-auth", W_OK, AT_EACCESS) == 0) {
-        pam_manager_remove_from_file("/etc/pam.d/system-auth");
+    if (access("/etc/pam.d/system-auth", F_OK) == 0) {
+        if (!pam_manager_remove_from_file("/etc/pam.d/system-auth")) ok = false;
     }
-    if (faccessat(AT_FDCWD, "/etc/pam.d/password-auth", W_OK, AT_EACCESS) == 0) {
-        pam_manager_remove_from_file("/etc/pam.d/password-auth");
+    if (access("/etc/pam.d/password-auth", F_OK) == 0) {
+        if (!pam_manager_remove_from_file("/etc/pam.d/password-auth")) ok = false;
     }
-    if (faccessat(AT_FDCWD, "/etc/pam.d/system-local-login", W_OK, AT_EACCESS) == 0) {
-        pam_manager_configure_arch_keyring_file("/etc/pam.d/system-local-login", false);
+    if (access("/etc/pam.d/system-local-login", F_OK) == 0) {
+        if (!pam_manager_configure_arch_keyring_file("/etc/pam.d/system-local-login", false)) ok = false;
     }
 
-    configure_polkit_and_udev_overrides(false);
+    if (!configure_polkit_and_udev_overrides(false, uninstall_mode)) ok = false;
 
-    (void)err_buf;
-    (void)err_len;
-    return true;
+    if (!ok && err_buf && err_len > 0) {
+        snprintf(err_buf, err_len, "Failed to cleanly remove one or more PAM or override configurations.");
+    }
+    return ok;
+}
+
+bool pam_manager_disable(char *err_buf, size_t err_len) {
+    return pam_manager_disable_ex(false, err_buf, err_len);
 }

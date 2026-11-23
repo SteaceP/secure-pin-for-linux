@@ -1,6 +1,10 @@
 post_install() {
+    rm -f /etc/udev/rules.d/70-tpm-pin.rules
     if command -v systemd-tmpfiles >/dev/null 2>&1; then
         systemd-tmpfiles --create /usr/lib/tmpfiles.d/tpm-pin.conf >/dev/null 2>&1 || true
+    fi
+    if [ -d /var/lib/tpm-pin ]; then
+        find /var/lib/tpm-pin -maxdepth 2 -type d -exec chown 0:0 {} + 2>/dev/null || true
     fi
     if command -v udevadm >/dev/null 2>&1; then
         udevadm control --reload >/dev/null 2>&1 || true
@@ -17,6 +21,6 @@ post_upgrade() {
 
 pre_remove() {
     if [ -x /usr/bin/tpm-pin-ctl ]; then
-        /usr/bin/tpm-pin-ctl pam disable >/dev/null 2>&1 || true
+        /usr/bin/tpm-pin-ctl pam disable --uninstall >/dev/null 2>&1 || true
     fi
 }

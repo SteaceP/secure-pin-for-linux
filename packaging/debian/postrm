@@ -5,6 +5,14 @@ if [ "$1" = "purge" ] || [ "$1" = "remove" ]; then
     if [ -x /usr/sbin/pam-auth-update ]; then
         /usr/sbin/pam-auth-update --package --remove tpm-pin >/dev/null 2>&1 || true
     fi
+    rm -f /etc/systemd/system/polkit-agent-helper@.service.d/tpm-pin.conf
+    rm -f /etc/systemd/system/polkit-agent-helper@.service.d/50-tpm-pin.conf
+    rmdir /etc/systemd/system/polkit-agent-helper@.service.d >/dev/null 2>&1 || true
+    rm -f /etc/udev/rules.d/70-tpm-pin.rules
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload >/dev/null 2>&1 || true
+        udevadm trigger --action=change --subsystem-match=tpmrm >/dev/null 2>&1 || true
+    fi
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload >/dev/null 2>&1 || true
     fi
@@ -13,7 +21,6 @@ fi
 if [ "$1" = "purge" ]; then
     rm -rf /var/lib/tpm-pin
     rm -rf /etc/tpm-pin
-    rm -rf /etc/systemd/system/polkit-agent-helper@.service.d/tpm-pin.conf
 fi
 
 #DEBHELPER#

@@ -2,6 +2,17 @@
 set -e
 
 if [ "$1" = "configure" ]; then
+    rm -f /etc/udev/rules.d/70-tpm-pin.rules
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload >/dev/null 2>&1 || true
+        udevadm trigger --action=change --subsystem-match=tpmrm >/dev/null 2>&1 || true
+    fi
+    if command -v systemd-tmpfiles >/dev/null 2>&1; then
+        systemd-tmpfiles --create /usr/lib/tmpfiles.d/tpm-pin.conf >/dev/null 2>&1 || true
+    fi
+    if [ -d /var/lib/tpm-pin ]; then
+        find /var/lib/tpm-pin -maxdepth 2 -type d -exec chown 0:0 {} + 2>/dev/null || true
+    fi
     if [ -x /usr/sbin/pam-auth-update ]; then
         /usr/sbin/pam-auth-update --package >/dev/null 2>&1 || true
     fi

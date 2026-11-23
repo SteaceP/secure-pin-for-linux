@@ -1,6 +1,9 @@
 CC ?= gcc
 CFLAGS ?= -O2 -g -Wall -Wextra -Wformat=2 -Wformat-security -fstack-protector-strong
-CFLAGS += -Iinclude -Iinclude/compat -fPIC
+CFLAGS += -Iinclude -fPIC
+ifneq ($(shell printf '#include <tss2/tss2_esys.h>\n#include <tss2/tss2_mu.h>\n#include <security/pam_modules.h>\n' | $(CC) -E -x c - >/dev/null 2>&1 && echo ok),ok)
+CFLAGS += -Iinclude/compat
+endif
 
 PREFIX ?= /usr
 BINDIR ?= $(PREFIX)/bin
@@ -30,6 +33,9 @@ endif
 
 ifeq ($(shell $(CC) -ltss2-esys -shared -o /dev/null 2>/dev/null && echo ok),ok)
 LDLIBS_TSS2 := -ltss2-esys
+ifeq ($(shell $(CC) -ltss2-mu -shared -o /dev/null 2>/dev/null && echo ok),ok)
+LDLIBS_TSS2 += -ltss2-mu
+endif
 ifeq ($(shell $(CC) -ltss2-tcti-device -shared -o /dev/null 2>/dev/null && echo ok),ok)
 LDLIBS_TSS2 += -ltss2-tcti-device
 endif
@@ -43,6 +49,9 @@ CFLAGS += -DHAVE_TCTI_MSSIM=1
 endif
 else ifneq ($(wildcard /usr/lib64/libtss2-esys.so.0),)
 LDLIBS_TSS2 := /usr/lib64/libtss2-esys.so.0
+ifneq ($(wildcard /usr/lib64/libtss2-mu.so.0),)
+LDLIBS_TSS2 += /usr/lib64/libtss2-mu.so.0
+endif
 ifneq ($(wildcard /usr/lib64/libtss2-tcti-device.so.0),)
 LDLIBS_TSS2 += /usr/lib64/libtss2-tcti-device.so.0
 endif
@@ -56,8 +65,22 @@ CFLAGS += -DHAVE_TCTI_MSSIM=1
 endif
 else ifneq ($(wildcard /usr/lib/*/libtss2-esys.so.0),)
 LDLIBS_TSS2 := $(firstword $(wildcard /usr/lib/*/libtss2-esys.so.0))
+ifneq ($(wildcard /usr/lib/*/libtss2-mu.so.0),)
+LDLIBS_TSS2 += $(firstword $(wildcard /usr/lib/*/libtss2-mu.so.0))
+endif
+ifneq ($(wildcard /usr/lib/*/libtss2-tcti-device.so.0),)
+LDLIBS_TSS2 += $(firstword $(wildcard /usr/lib/*/libtss2-tcti-device.so.0))
+endif
+ifneq ($(wildcard /usr/lib/*/libtss2-tcti-swtpm.so.0),)
+LDLIBS_TSS2 += $(firstword $(wildcard /usr/lib/*/libtss2-tcti-swtpm.so.0))
+CFLAGS += -DHAVE_TCTI_SWTPM=1
+endif
+ifneq ($(wildcard /usr/lib/*/libtss2-tcti-mssim.so.0),)
+LDLIBS_TSS2 += $(firstword $(wildcard /usr/lib/*/libtss2-tcti-mssim.so.0))
+CFLAGS += -DHAVE_TCTI_MSSIM=1
+endif
 else
-LDLIBS_TSS2 := -ltss2-esys
+LDLIBS_TSS2 := -ltss2-esys -ltss2-mu -ltss2-tcti-device
 endif
 
 COMMON_SRCS := src/common/crypto.c \
@@ -115,8 +138,6 @@ install: all
 	install -m 4755 $(BUILD_DIR)/tpm-pin-verify $(DESTDIR)$(LIBEXECDIR)/tpm-pin-verify
 	install -d $(DESTDIR)$(DATADIR)/polkit-1/actions
 	install -m 0644 gui/io.github.securepin.policy $(DESTDIR)$(DATADIR)/polkit-1/actions/io.github.securepin.policy
-	install -d $(DESTDIR)$(PREFIX)/lib/udev/rules.d
-	install -m 0644 packaging/udev/70-tpm-pin.rules $(DESTDIR)$(PREFIX)/lib/udev/rules.d/70-tpm-pin.rules
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system/polkit-agent-helper@.service.d
 	install -m 0644 packaging/systemd/polkit-agent-helper-tpm-pin.conf $(DESTDIR)$(PREFIX)/lib/systemd/system/polkit-agent-helper@.service.d/50-tpm-pin.conf
 	install -d $(DESTDIR)$(PREFIX)/lib/tmpfiles.d

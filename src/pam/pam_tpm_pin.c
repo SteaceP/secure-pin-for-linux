@@ -124,20 +124,47 @@ static bool verify_via_setuid_helper(const char *username, const char *pin, int 
     return false;
 }
 
+static bool lookup_uid_by_name(const char *username, uid_t *uid_out) {
+    if (!username || !uid_out) return false;
+    long init_sz = sysconf(_SC_GETPW_R_SIZE_MAX);
+    size_t buf_sz = (init_sz > 0) ? (size_t)init_sz : 1024;
+    if (buf_sz < 1024) buf_sz = 1024;
+
+    while (buf_sz <= 65536) {
+        char *pbuf = (char *)malloc(buf_sz);
+        if (!pbuf) return false;
+        struct passwd pwd_buf;
+        struct passwd *pwd = NULL;
+        int rc = getpwnam_r(username, &pwd_buf, pbuf, buf_sz, &pwd);
+        if (rc == 0 && pwd) {
+            *uid_out = pwd->pw_uid;
+            free(pbuf);
+            return true;
+        }
+        free(pbuf);
+        if (rc != ERANGE) return false;
+        buf_sz *= 2;
+    }
+    return false;
+}
+
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     (void)argc;
     (void)argv;
 
-    /* Prevent TSS2 error strings from leaking into Polkit helper socket streams */
-    if (getenv("TSS2_LOG") == NULL) {
-        setenv("TSS2_LOG", "all+NONE", 1);
-    }
-    if (getenv("TSS2_LOGFILE") == NULL) {
-        setenv("TSS2_LOGFILE", "/dev/null", 1);
-    }
-
     const char *service = NULL;
     pam_get_item(pamh, PAM_SERVICE, (const void **)&service);
+
+    const void *rhost_item = NULL;
+    if (pam_get_item(pamh, PAM_RHOST, &rhost_item) == PAM_SUCCESS && rhost_item) {
+        const char *rhost = (const char *)rhost_item;
+        if (rhost[0] != '\0' &&
+            strcmp(rhost, "localhost") != 0 &&
+            strcmp(rhost, "127.0.0.1") != 0 &&
+            strcmp(rhost, "::1") != 0) {
+            return PAM_IGNORE;
+        }
+    }
 
     tpm_pin_config_t cfg;
     tpm_pin_config_load(NULL, &cfg);
@@ -152,15 +179,13 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
         return PAM_USER_UNKNOWN;
     }
 
-    struct passwd pwd_buf;
-    struct passwd *pwd = NULL;
-    char pbuf[1024];
-    if (getpwnam_r(username, &pwd_buf, pbuf, sizeof(pbuf), &pwd) != 0 || !pwd) {
+    uid_t target_uid = 0;
+    if (!lookup_uid_by_name(username, &target_uid)) {
         return PAM_USER_UNKNOWN;
     }
 
     /* If user has not enrolled a PIN, pass through cleanly */
-    if (!tpm_pin_user_is_enrolled(pwd->pw_uid, &cfg)) {
+    if (!tpm_pin_user_is_enrolled(target_uid, &cfg)) {
         return PAM_IGNORE;
     }
 
@@ -191,7 +216,7 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
     int tpm_rc = 0;
 
     bool is_unpriv = (geteuid() != 0);
-    if (is_unpriv && pwd->pw_uid != getuid()) {
+    if (is_unpriv && target_uid != getuid()) {
         tpm_pin_zero(input, strlen(input));
         free(input);
         return PAM_AUTHINFO_UNAVAIL;
@@ -201,7 +226,7 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
     bool pin_success = false;
     if (likely_pin) {
         bool use_helper = (is_unpriv &&
-                           pwd->pw_uid == getuid() &&
+                           target_uid == getuid() &&
                            find_verify_helper() != NULL &&
                            cfg.tcti_name[0] == '\0' &&
                            secure_getenv("TCTI") == NULL);
@@ -213,7 +238,7 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
             char *pwd_out = is_unpriv ? NULL : unsealed_pwd;
             size_t pwd_sz = is_unpriv ? 0 : sizeof(unsealed_pwd);
             pin_success = tpm_pin_verify_user(
-                pwd->pw_uid,
+                target_uid,
                 input,
                 &cfg,
                 pwd_out,
@@ -232,7 +257,10 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
             /* Stash unsealed password in PAM data so pam_gnome_keyring sessions auto-unlock */
             char *gkr_pwd = strdup(unsealed_pwd);
             if (gkr_pwd) {
-                pam_set_data(pamh, "gkr_system_authtok", gkr_pwd, pam_cleanup_secret);
+                if (pam_set_data(pamh, "gkr_system_authtok", gkr_pwd, pam_cleanup_secret) != PAM_SUCCESS) {
+                    tpm_pin_zero(gkr_pwd, strlen(gkr_pwd));
+                    free(gkr_pwd);
+                }
             }
         } else {
             pam_set_item(pamh, PAM_AUTHTOK, input);
@@ -254,9 +282,9 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
     }
 
     if (!(flags & PAM_SILENT)) {
-        if ((tpm_rc & 0xFFF) == (TPM2_RC_LOCKOUT & 0xFFF)) {
+        if (tpm_pin_rc_is_lockout((uint32_t)tpm_rc)) {
             pam_info(pamh, "TPM Dictionary Attack Lockout active. Falling back to system password.");
-        } else if ((tpm_rc & 0xFFF) == (TPM2_RC_POLICY_FAIL & 0xFFF) || (tpm_rc & 0xBF) == 0x84) {
+        } else if (tpm_pin_rc_is_policy_fail((uint32_t)tpm_rc)) {
             pam_info(pamh, "Secure Boot (PCR 7) state changed. Falling back to system password.");
         }
     }

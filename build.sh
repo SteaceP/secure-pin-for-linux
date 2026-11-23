@@ -73,10 +73,18 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -j|--jobs)
+            if [ $# -lt 2 ] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --jobs requires a positive integer argument." >&2
+                exit 1
+            fi
             JOBS="$2"
             shift 2
             ;;
         --prefix)
+            if [ $# -lt 2 ] || [ -z "$2" ]; then
+                echo "Error: --prefix requires a path argument." >&2
+                exit 1
+            fi
             PREFIX="$2"
             shift 2
             ;;
@@ -156,7 +164,7 @@ if [ "$DO_PACKAGE" = true ]; then
         fi
     else
         VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt 2>/dev/null)
-        [ -z "$VERSION" ] && VERSION="1.0.7"
+        [ -z "$VERSION" ] && VERSION="1.0.8"
         echo "Building universal tarball (.tar.gz)..."
         tar --exclude='.git' \
             --exclude='./build*' \
@@ -175,46 +183,50 @@ if [ "$DO_PACKAGE" = true ]; then
 
     if [ "$BUILD_ARCH" = true ] || { [ "$HOST_IS_ARCH" = true ] && command -v makepkg >/dev/null 2>&1; }; then
         VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-        [ -z "$VERSION" ] && VERSION="1.0.7"
+        [ -z "$VERSION" ] && VERSION="1.0.8"
         if command -v makepkg >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
             echo "Building Arch Linux package natively via makepkg..."
-            ARCH_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tpm-pin-makepkg.XXXXXX")
-            tar --exclude='.git' \
-                --exclude='./build*' \
-                --exclude='./dist' \
-                --exclude='./release-assets' \
-                --exclude='./flatpak-repo' \
-                --exclude='./.flatpak-builder' \
-                --exclude='*.pkg.tar*' \
-                --transform="s,^\.,tpm-pin-${VERSION}," \
-                -czf "$ARCH_TMP/tpm-pin-${VERSION}.tar.gz" -C "$ROOT_DIR" .
-            cp packaging/arch/PKGBUILD packaging/arch/tpm-pin.install "$ARCH_TMP/"
-            sed -i "s/^pkgver=.*/pkgver=${VERSION}/" "$ARCH_TMP/PKGBUILD"
-            (cd "$ARCH_TMP" && PKGEXT='.pkg.tar.zst' makepkg -f --noconfirm)
-            for pkgf in "$ARCH_TMP"/tpm-pin-"${VERSION}"-*.pkg.tar*; do
-                [ -f "$pkgf" ] && cp "$pkgf" "$DIST_DIR/"
-            done
-            rm -rf "$ARCH_TMP"
+            (
+                ARCH_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tpm-pin-makepkg.XXXXXX")
+                trap 'rm -rf "$ARCH_TMP"' EXIT
+                tar --exclude='.git' \
+                    --exclude='./build*' \
+                    --exclude='./dist' \
+                    --exclude='./release-assets' \
+                    --exclude='./flatpak-repo' \
+                    --exclude='./.flatpak-builder' \
+                    --exclude='*.pkg.tar*' \
+                    --transform="s,^\.,tpm-pin-${VERSION}," \
+                    -czf "$ARCH_TMP/tpm-pin-${VERSION}.tar.gz" -C "$ROOT_DIR" .
+                cp packaging/arch/PKGBUILD packaging/arch/tpm-pin.install "$ARCH_TMP/"
+                sed -i "s/^pkgver=.*/pkgver=${VERSION}/" "$ARCH_TMP/PKGBUILD"
+                (cd "$ARCH_TMP" && PKGEXT='.pkg.tar.zst' makepkg -f --noconfirm)
+                for pkgf in "$ARCH_TMP"/tpm-pin-"${VERSION}"-*.pkg.tar*; do
+                    [ -f "$pkgf" ] && cp "$pkgf" "$DIST_DIR/"
+                done
+            )
         elif command -v docker >/dev/null 2>&1; then
             echo "Building Arch Linux package via Docker..."
             docker run --rm \
+                -e VERSION="$VERSION" \
                 -v "$ROOT_DIR:/src:ro" \
                 -v "$DIST_DIR:/out" \
-                archlinux:latest bash -c "
+                archlinux:latest bash -c '
+                  set -e
                   pacman -Sy --noconfirm base-devel cmake git openssl pam polkit tpm2-tss python python-gobject gtk4 libadwaita >/dev/null 2>&1
                   useradd -m builder
-                  echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
-                  git config --global --add safe.directory '*'
+                  echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+                  git config --global --add safe.directory "*"
                   mkdir -p /home/builder/pkg
                   git clone /src /home/builder/repo >/dev/null 2>&1
                   cd /home/builder/repo
-                  git archive --format=tar.gz --prefix=tpm-pin-${VERSION}/ HEAD > /home/builder/pkg/tpm-pin-${VERSION}.tar.gz
+                  git archive --format=tar.gz --prefix="tpm-pin-${VERSION}/" HEAD > "/home/builder/pkg/tpm-pin-${VERSION}.tar.gz"
                   cp packaging/arch/PKGBUILD packaging/arch/tpm-pin.install /home/builder/pkg/
-                  sed -i \"s/^pkgver=.*/pkgver=${VERSION}/\" /home/builder/pkg/PKGBUILD
+                  sed -i "s/^pkgver=.*/pkgver=${VERSION}/" /home/builder/pkg/PKGBUILD
                   chown -R builder:builder /home/builder
-                  su builder -c 'cd /home/builder/pkg && makepkg -f --noconfirm' >/dev/null 2>&1
+                  su builder -c "cd /home/builder/pkg && makepkg -f --noconfirm" >/dev/null 2>&1
                   cp /home/builder/pkg/*.pkg.tar.zst /out/
-                "
+                '
         else
             echo "Neither makepkg nor Docker found, skipping Arch Linux package."
         fi
@@ -224,7 +236,7 @@ if [ "$DO_PACKAGE" = true ]; then
         if command -v flatpak-builder >/dev/null 2>&1; then
             echo "Building Flatpak package via flatpak-builder..."
             VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-            [ -z "$VERSION" ] && VERSION="1.0.7"
+            [ -z "$VERSION" ] && VERSION="1.0.8"
             mkdir -p "$ROOT_DIR/build-flatpak" "$ROOT_DIR/flatpak-repo"
             flatpak-builder --force-clean --repo="$ROOT_DIR/flatpak-repo" "$ROOT_DIR/build-flatpak" packaging/flatpak/io.github.securepin.Settings.yml
             flatpak build-bundle "$ROOT_DIR/flatpak-repo" "$DIST_DIR/io.github.securepin.Settings-${VERSION}.flatpak" io.github.securepin.Settings

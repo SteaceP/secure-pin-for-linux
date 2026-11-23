@@ -52,6 +52,12 @@ static bool test_policy_validation(void) {
     cfg.digits_only = false;
     if (!tpm_pin_validate_pin("p1n_C0de", &cfg, err, sizeof(err))) return false;
 
+    /* Control characters must be rejected even in alphanumeric mode */
+    if (tpm_pin_validate_pin("p1n\n123", &cfg, err, sizeof(err))) return false;
+    if (tpm_pin_validate_pin("p1n\r123", &cfg, err, sizeof(err))) return false;
+    if (tpm_pin_validate_pin("p1n\x07" "123", &cfg, err, sizeof(err))) return false;
+    if (tpm_pin_is_likely_pin("p1n\n123", &cfg)) return false;
+
     return true;
 }
 
@@ -81,9 +87,12 @@ static bool test_crypto_roundtrip(void) {
 
     if (strcmp((char *)decrypted, plaintext) != 0) return false;
 
-    /* Tampering with ciphertext should fail decryption */
+    /* Tampering with ciphertext should fail decryption and zero output buffer */
     ciphertext[0] ^= 0xFF;
     if (tpm_pin_decrypt(key, iv, ciphertext, pt_len, tag, decrypted)) return false;
+    for (size_t i = 0; i < pt_len; i++) {
+        if (decrypted[i] != 0) return false;
+    }
 
     return true;
 }
@@ -126,6 +135,19 @@ static bool test_config_serialization(void) {
     if (loaded.digits_only != true) return false;
     if (loaded.min_length != TPM_PIN_MAX_PIN_LEN) return false;
     if (loaded.max_length != TPM_PIN_MAX_PIN_LEN) return false;
+
+    /* Invalid negative/non-numeric DA config values must not wrap or zero out timers */
+    cf = fopen(tmp_conf, "w");
+    if (!cf) return false;
+    fprintf(cf, "da_max_tries = -1\nda_recovery_time = abc\nda_lockout_recovery = -5\n");
+    fclose(cf);
+
+    bool ok_invalid = tpm_pin_config_load(tmp_conf, &loaded);
+    unlink(tmp_conf);
+    if (!ok_invalid) return false;
+    if (loaded.da_max_tries != 5) return false;
+    if (loaded.da_recovery_time != 600) return false;
+    if (loaded.da_lockout_recovery != 86400) return false;
 
     return true;
 }
@@ -276,8 +298,10 @@ static bool test_tpm_enroll_and_verify_pcr7(void) {
     snprintf(blob_path, sizeof(blob_path), "%s/%u/sealed.blob", cfg.data_dir, (unsigned int)test_uid);
     FILE *bf = fopen(blob_path, "r+b");
     if (bf) {
-        tpm_sealed_header_t hdr;
-        if (fread(&hdr, sizeof(hdr), 1, bf) == 1) {
+        tpm_sealed_header_t orig_hdr;
+        bool have_hdr = (fread(&orig_hdr, sizeof(orig_hdr), 1, bf) == 1);
+        if (have_hdr) {
+            tpm_sealed_header_t hdr = orig_hdr;
             hdr.flags &= ~FLAG_PCR7_BOUND;
             fseek(bf, 0, SEEK_SET);
             fwrite(&hdr, sizeof(hdr), 1, bf);
@@ -286,6 +310,13 @@ static bool test_tpm_enroll_and_verify_pcr7(void) {
         if (tpm_pin_verify_user(test_uid, test_pin, &cfg, unsealed, sizeof(unsealed), &tpm_rc)) {
             tpm_pin_remove_user(test_uid, &cfg);
             return false;
+        }
+        if (have_hdr) {
+            bf = fopen(blob_path, "r+b");
+            if (bf) {
+                fwrite(&orig_hdr, sizeof(orig_hdr), 1, bf);
+                fclose(bf);
+            }
         }
     }
 
@@ -301,6 +332,43 @@ static bool test_tpm_enroll_and_verify_pcr7(void) {
         tpm_pin_remove_user(test_uid, &cfg);
         return false;
     }
+
+    /* Verify RC helper behavior across Format-1 / Format-0 return codes */
+    if (!tpm_pin_rc_is_lockout(0x921) || !tpm_pin_rc_is_policy_fail(0x99d) || !tpm_pin_rc_is_policy_fail(0x9d)) {
+        tpm_pin_remove_user(test_uid, &cfg);
+        return false;
+    }
+
+#if defined(__has_include) && __has_include(<tss2/tss2_common.h>)
+    /* When running against swtpm/mssim, extend PCR 7 and verify policy fail RC detection */
+    if (tcti_env && (strncmp(tcti_env, "swtpm", 5) == 0 || strncmp(tcti_env, "mssim", 5) == 0)) {
+        ESYS_CONTEXT *pcr_ctx = NULL;
+        if (tpm_engine_init(cfg.tcti_name, &pcr_ctx) != TSS2_RC_SUCCESS || !pcr_ctx) {
+            tpm_pin_remove_user(test_uid, &cfg);
+            return false;
+        }
+        TPML_DIGEST_VALUES pcr_vals;
+        memset(&pcr_vals, 0, sizeof(pcr_vals));
+        pcr_vals.count = 1;
+        pcr_vals.digests[0].hashAlg = TPM2_ALG_SHA256;
+        pcr_vals.digests[0].digest.sha256[0] = 0xAA;
+        TSS2_RC ext_rc = Esys_PCR_Extend(pcr_ctx, 7, ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE, &pcr_vals);
+        tpm_engine_destroy(&pcr_ctx);
+        if (ext_rc != TSS2_RC_SUCCESS) {
+            tpm_pin_remove_user(test_uid, &cfg);
+            return false;
+        }
+        int pcr_rc = 0;
+        if (tpm_pin_verify_user(test_uid, test_pin, &cfg, unsealed, sizeof(unsealed), &pcr_rc)) {
+            tpm_pin_remove_user(test_uid, &cfg);
+            return false;
+        }
+        if (!tpm_pin_rc_is_policy_fail((uint32_t)pcr_rc)) {
+            tpm_pin_remove_user(test_uid, &cfg);
+            return false;
+        }
+    }
+#endif
 
     tpm_pin_remove_user(test_uid, &cfg);
     return true;
@@ -499,6 +567,22 @@ static bool test_arch_distro_and_pam_stack(void) {
 
     unlink(local_login_link);
     unlink(local_login_path);
+
+    /* Verify sufficient pam_unix.so + required pam_deny.so emits success=done */
+    const char *sufficient_unix_auth =
+        "#%PAM-1.0\n"
+        "auth       required     pam_env.so\n"
+        "auth       sufficient   pam_unix.so\n"
+        "auth       required     pam_deny.so\n";
+    if (!write_whole_file(sysauth_path, sufficient_unix_auth)) return false;
+    if (!pam_manager_apply_auth_file(sysauth_path) ||
+        !read_whole_file(sysauth_path, updated, sizeof(updated)) ||
+        !strstr(updated, "auth\t[success=done authinfo_unavail=ignore open_err=ignore default=ignore]\tpam_tpm_pin.so")) {
+        unlink(sysauth_path);
+        return false;
+    }
+    unlink(sysauth_path);
+
     return true;
 }
 
@@ -658,12 +742,17 @@ static bool test_pam_service_allowlist(void) {
     tpm_pin_config_t cfg;
     tpm_pin_config_defaults(&cfg);
 
-    /* Remote / background services must NEVER be allowed */
+    /* Remote / background / autologin services must NEVER be allowed */
     if (tpm_pin_is_service_enabled("sshd", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("dropbear", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("rlogin", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("klogin", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("eklogin", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("krlogin", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("telnet", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("system-remote-login", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("sddm-autologin", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("gdm-autologin", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("cockpit", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("crond", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("xrdp-sesman", false, &cfg)) return false;
@@ -674,6 +763,7 @@ static bool test_pam_service_allowlist(void) {
     cfg.enable_lockscreen = false;
     if (!tpm_pin_is_service_enabled("greetd", false, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("sddm", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("lightdm", false, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("gdm-password", false, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("ly", false, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("login", false, &cfg)) return false;
@@ -684,6 +774,7 @@ static bool test_pam_service_allowlist(void) {
     if (tpm_pin_is_service_enabled("cosmic-greeter", true, &cfg)) return false;
     if (tpm_pin_is_service_enabled("kde", true, &cfg)) return false;
     if (tpm_pin_is_service_enabled("hyprlock", true, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("swaylock", true, &cfg)) return false;
     if (tpm_pin_is_service_enabled("xfce4-screensaver", true, &cfg)) return false;
 
     cfg.enable_login = false;
@@ -695,17 +786,24 @@ static bool test_pam_service_allowlist(void) {
     if (!tpm_pin_is_service_enabled("cosmic-greeter", true, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("kde", true, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("hyprlock", true, &cfg)) return false;
-    if (!tpm_pin_is_service_enabled("polkit-1", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("swaylock", true, &cfg)) return false;
 
-    /* Sudo / doas / su-l follow enable_sudo and must reject unprivileged spoofing */
+    /* Sudo / doas / su-l / polkit follow enable_sudo and must reject unprivileged spoofing */
     cfg.enable_sudo = true;
     if (!tpm_pin_is_service_enabled("sudo", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("sudo", true, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("doas", false, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("su-l", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("polkit-1", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("polkit-1", true, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("polkit", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("pkexec", false, &cfg)) return false;
     cfg.enable_sudo = false;
     if (tpm_pin_is_service_enabled("sudo", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("doas", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("polkit-1", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("polkit", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("pkexec", false, &cfg)) return false;
 
     return true;
 }

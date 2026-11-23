@@ -31,76 +31,81 @@ static TSS2_RC init_tcti(const char *tcti_conf, TSS2_TCTI_CONTEXT **out_tcti) {
         }
     }
 
-    if (conf && (strncmp(conf, "mssim:", 6) == 0 || strcmp(conf, "mssim") == 0)) {
+    if (conf && conf[0] != '\0') {
+        if (strncmp(conf, "mssim:", 6) == 0 || strcmp(conf, "mssim") == 0) {
 #ifdef HAVE_TCTI_MSSIM
-        const char *raw_args = (strncmp(conf, "mssim:", 6) == 0) ? conf + 6 : NULL;
-        const char *mssim_args = (raw_args && strlen(raw_args) > 0) ? raw_args : NULL;
-        size_t size = 0;
-        TSS2_RC rc = Tss2_Tcti_Mssim_Init(NULL, &size, mssim_args);
-        if (rc != TSS2_RC_SUCCESS) return rc;
+            const char *raw_args = (strncmp(conf, "mssim:", 6) == 0) ? conf + 6 : NULL;
+            const char *mssim_args = (raw_args && strlen(raw_args) > 0) ? raw_args : NULL;
+            size_t size = 0;
+            TSS2_RC rc = Tss2_Tcti_Mssim_Init(NULL, &size, mssim_args);
+            if (rc != TSS2_RC_SUCCESS) return rc;
 
-        TSS2_TCTI_CONTEXT *ctx = (TSS2_TCTI_CONTEXT *)malloc(size);
-        if (!ctx) return TSS2_TCTI_RC_LAYER;
+            TSS2_TCTI_CONTEXT *ctx = (TSS2_TCTI_CONTEXT *)malloc(size);
+            if (!ctx) return TSS2_TCTI_RC_LAYER;
 
-        rc = Tss2_Tcti_Mssim_Init(ctx, &size, mssim_args);
-        if (rc != TSS2_RC_SUCCESS) {
-            free(ctx);
-            return rc;
-        }
-        *out_tcti = ctx;
-        return TSS2_RC_SUCCESS;
-#else
-        return TSS2_TCTI_RC_LAYER;
-#endif
-    } else if (conf && (strncmp(conf, "swtpm:", 6) == 0 || strcmp(conf, "swtpm") == 0)) {
-#ifdef HAVE_TCTI_SWTPM
-        const char *raw_args = (strncmp(conf, "swtpm:", 6) == 0) ? conf + 6 : NULL;
-        char swtpm_buf[256];
-        const char *swtpm_args = NULL;
-
-        if (raw_args && strlen(raw_args) > 0) {
-            if (strstr(raw_args, "host=") == NULL && strstr(raw_args, "path=") == NULL) {
-                snprintf(swtpm_buf, sizeof(swtpm_buf), "host=127.0.0.1,%s", raw_args);
-                swtpm_args = swtpm_buf;
-            } else {
-                swtpm_args = raw_args;
+            rc = Tss2_Tcti_Mssim_Init(ctx, &size, mssim_args);
+            if (rc != TSS2_RC_SUCCESS) {
+                free(ctx);
+                return rc;
             }
-        }
-        size_t size = 0;
-        TSS2_RC rc = Tss2_Tcti_Swtpm_Init(NULL, &size, swtpm_args);
-        if (rc != TSS2_RC_SUCCESS) return rc;
-
-        TSS2_TCTI_CONTEXT *ctx = (TSS2_TCTI_CONTEXT *)malloc(size);
-        if (!ctx) return TSS2_TCTI_RC_LAYER;
-
-        rc = Tss2_Tcti_Swtpm_Init(ctx, &size, swtpm_args);
-        if (rc != TSS2_RC_SUCCESS) {
-            free(ctx);
-            return rc;
-        }
-        *out_tcti = ctx;
-        return TSS2_RC_SUCCESS;
+            *out_tcti = ctx;
+            return TSS2_RC_SUCCESS;
 #else
-        return TSS2_TCTI_RC_LAYER;
+            return TSS2_TCTI_RC_LAYER;
 #endif
-    } else if (conf && (strncmp(conf, "device:", 7) == 0 || strcmp(conf, "device") == 0)) {
-        const char *dev_path = (strncmp(conf, "device:", 7) == 0) ? conf + 7 : "/dev/tpmrm0";
-        if (strlen(dev_path) == 0) dev_path = "/dev/tpmrm0";
-        size_t size = 0;
-        TSS2_RC rc = Tss2_Tcti_Device_Init(NULL, &size, dev_path);
-        if (rc != TSS2_RC_SUCCESS) return rc;
+        } else if (strncmp(conf, "swtpm:", 6) == 0 || strcmp(conf, "swtpm") == 0) {
+#ifdef HAVE_TCTI_SWTPM
+            const char *raw_args = (strncmp(conf, "swtpm:", 6) == 0) ? conf + 6 : NULL;
+            char swtpm_buf[256];
+            const char *swtpm_args = NULL;
 
-        TSS2_TCTI_CONTEXT *ctx = (TSS2_TCTI_CONTEXT *)malloc(size);
-        if (!ctx) return TSS2_TCTI_RC_LAYER;
+            if (raw_args && strlen(raw_args) > 0) {
+                if (strstr(raw_args, "host=") == NULL && strstr(raw_args, "path=") == NULL) {
+                    snprintf(swtpm_buf, sizeof(swtpm_buf), "host=127.0.0.1,%s", raw_args);
+                    swtpm_args = swtpm_buf;
+                } else {
+                    swtpm_args = raw_args;
+                }
+            }
+            size_t size = 0;
+            TSS2_RC rc = Tss2_Tcti_Swtpm_Init(NULL, &size, swtpm_args);
+            if (rc != TSS2_RC_SUCCESS) return rc;
 
-        rc = Tss2_Tcti_Device_Init(ctx, &size, dev_path);
-        if (rc != TSS2_RC_SUCCESS) {
-            free(ctx);
-            return rc;
+            TSS2_TCTI_CONTEXT *ctx = (TSS2_TCTI_CONTEXT *)malloc(size);
+            if (!ctx) return TSS2_TCTI_RC_LAYER;
+
+            rc = Tss2_Tcti_Swtpm_Init(ctx, &size, swtpm_args);
+            if (rc != TSS2_RC_SUCCESS) {
+                free(ctx);
+                return rc;
+            }
+            *out_tcti = ctx;
+            return TSS2_RC_SUCCESS;
+#else
+            return TSS2_TCTI_RC_LAYER;
+#endif
+        } else if (strncmp(conf, "device:", 7) == 0 || strcmp(conf, "device") == 0) {
+            const char *dev_path = (strncmp(conf, "device:", 7) == 0) ? conf + 7 : "/dev/tpmrm0";
+            if (strlen(dev_path) == 0) dev_path = "/dev/tpmrm0";
+            size_t size = 0;
+            TSS2_RC rc = Tss2_Tcti_Device_Init(NULL, &size, dev_path);
+            if (rc != TSS2_RC_SUCCESS) return rc;
+
+            TSS2_TCTI_CONTEXT *ctx = (TSS2_TCTI_CONTEXT *)malloc(size);
+            if (!ctx) return TSS2_TCTI_RC_LAYER;
+
+            rc = Tss2_Tcti_Device_Init(ctx, &size, dev_path);
+            if (rc != TSS2_RC_SUCCESS) {
+                free(ctx);
+                return rc;
+            }
+            *out_tcti = ctx;
+            return TSS2_RC_SUCCESS;
         }
-        *out_tcti = ctx;
-        return TSS2_RC_SUCCESS;
-    } else if (faccessat(AT_FDCWD, "/dev/tpmrm0", R_OK | W_OK, AT_EACCESS) == 0) {
+        return TSS2_TCTI_RC_LAYER;
+    }
+
+    if (faccessat(AT_FDCWD, "/dev/tpmrm0", R_OK | W_OK, AT_EACCESS) == 0) {
         size_t size = 0;
         TSS2_RC rc = Tss2_Tcti_Device_Init(NULL, &size, "/dev/tpmrm0");
         if (rc == TSS2_RC_SUCCESS) {
@@ -137,11 +142,6 @@ static TSS2_RC init_tcti(const char *tcti_conf, TSS2_TCTI_CONTEXT **out_tcti) {
 TSS2_RC tpm_engine_init(const char *tcti_conf, ESYS_CONTEXT **esys_ctx) {
     if (!esys_ctx) return TSS2_ESYS_RC_BAD_REFERENCE;
     *esys_ctx = NULL;
-
-    /* Silence noisy default libtss2 stderr logs unless explicitly configured by caller */
-    if (getenv("TSS2_LOG") == NULL) {
-        setenv("TSS2_LOG", "all+NONE", 0);
-    }
 
     TSS2_TCTI_CONTEXT *tcti = NULL;
     TSS2_RC rc = init_tcti(tcti_conf, &tcti);
@@ -376,9 +376,15 @@ TSS2_RC tpm_engine_seal_key(ESYS_CONTEXT *ctx,
         Esys_FlushContext(ctx, primaryHandle);
         return s_rc;
     }
-    Esys_TRSess_SetAttributes(ctx, authSession,
+    s_rc = Esys_TRSess_SetAttributes(ctx, authSession,
         TPMA_SESSION_DECRYPT | TPMA_SESSION_ENCRYPT | TPMA_SESSION_CONTINUESESSION,
         0xff);
+    if (s_rc != TSS2_RC_SUCCESS) {
+        tpm_pin_zero(&inSensitive, sizeof(inSensitive));
+        Esys_FlushContext(ctx, authSession);
+        Esys_FlushContext(ctx, primaryHandle);
+        return s_rc;
+    }
 
     rc = Esys_Create(
         ctx,
@@ -449,7 +455,13 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
     }
     authVal.size = (UINT16)auth_len;
     memcpy(authVal.buffer, auth, auth_len);
-    Esys_TR_SetAuth(ctx, itemHandle, &authVal);
+    rc = Esys_TR_SetAuth(ctx, itemHandle, &authVal);
+    if (rc != TSS2_RC_SUCCESS) {
+        tpm_pin_zero(&authVal, sizeof(authVal));
+        Esys_FlushContext(ctx, itemHandle);
+        Esys_FlushContext(ctx, primaryHandle);
+        return rc;
+    }
 
     TPM2B_SENSITIVE_DATA *outData = NULL;
 
@@ -469,24 +481,26 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
         );
 
         if (rc == TSS2_RC_SUCCESS) {
-            Esys_TRSess_SetAttributes(ctx, policySession,
-                TPMA_SESSION_DECRYPT | TPMA_SESSION_ENCRYPT | TPMA_SESSION_CONTINUESESSION,
+            rc = Esys_TRSess_SetAttributes(ctx, policySession,
+                TPMA_SESSION_ENCRYPT | TPMA_SESSION_CONTINUESESSION,
                 0xff);
 
-            TPML_PCR_SELECTION pcrSel;
-            fill_pcr7_selection(&pcrSel);
-            rc = Esys_PolicyPCR(ctx, policySession, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, NULL, &pcrSel);
             if (rc == TSS2_RC_SUCCESS) {
-                rc = Esys_PolicyAuthValue(ctx, policySession, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE);
+                TPML_PCR_SELECTION pcrSel;
+                fill_pcr7_selection(&pcrSel);
+                rc = Esys_PolicyPCR(ctx, policySession, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, NULL, &pcrSel);
                 if (rc == TSS2_RC_SUCCESS) {
-                    rc = Esys_Unseal(
-                        ctx,
-                        itemHandle,
-                        policySession,
-                        ESYS_TR_NONE,
-                        ESYS_TR_NONE,
-                        &outData
-                    );
+                    rc = Esys_PolicyAuthValue(ctx, policySession, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE);
+                    if (rc == TSS2_RC_SUCCESS) {
+                        rc = Esys_Unseal(
+                            ctx,
+                            itemHandle,
+                            policySession,
+                            ESYS_TR_NONE,
+                            ESYS_TR_NONE,
+                            &outData
+                        );
+                    }
                 }
             }
             Esys_FlushContext(ctx, policySession);
@@ -511,18 +525,20 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
             Esys_FlushContext(ctx, primaryHandle);
             return s_rc;
         }
-        Esys_TRSess_SetAttributes(ctx, authSession,
-            TPMA_SESSION_DECRYPT | TPMA_SESSION_ENCRYPT | TPMA_SESSION_CONTINUESESSION,
+        rc = Esys_TRSess_SetAttributes(ctx, authSession,
+            TPMA_SESSION_ENCRYPT | TPMA_SESSION_CONTINUESESSION,
             0xff);
 
-        rc = Esys_Unseal(
-            ctx,
-            itemHandle,
-            authSession,
-            ESYS_TR_NONE,
-            ESYS_TR_NONE,
-            &outData
-        );
+        if (rc == TSS2_RC_SUCCESS) {
+            rc = Esys_Unseal(
+                ctx,
+                itemHandle,
+                authSession,
+                ESYS_TR_NONE,
+                ESYS_TR_NONE,
+                &outData
+            );
+        }
 
         if (authSession != ESYS_TR_NONE) {
             Esys_FlushContext(ctx, authSession);
@@ -531,11 +547,18 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
 
     tpm_pin_zero(&authVal, sizeof(authVal));
 
-    if (rc == TSS2_RC_SUCCESS && outData) {
-        size_t copy_len = outData->size;
-        if (copy_len > *out_key_len) copy_len = *out_key_len;
-        memcpy(out_key, outData->buffer, copy_len);
-        *out_key_len = copy_len;
+    if (rc == TSS2_RC_SUCCESS) {
+        if (!outData || outData->size > *out_key_len) {
+            if (outData) {
+                tpm_pin_zero(outData->buffer, outData->size);
+                Esys_Free(outData);
+            }
+            Esys_FlushContext(ctx, itemHandle);
+            Esys_FlushContext(ctx, primaryHandle);
+            return TSS2_ESYS_RC_BAD_REFERENCE;
+        }
+        memcpy(out_key, outData->buffer, outData->size);
+        *out_key_len = outData->size;
         tpm_pin_zero(outData->buffer, outData->size);
         Esys_Free(outData);
     }
@@ -572,10 +595,15 @@ TSS2_RC tpm_engine_reset_da_lockout(ESYS_CONTEXT *ctx) {
 }
 
 bool tpm_engine_sysfs_present(void) {
-    FILE *f_ver = fopen("/sys/class/tpm/tpm0/tpm_version_major", "r");
+    FILE *f_ver = fopen("/sys/class/tpm/tpm0/tpm_version_major", "re");
     if (f_ver) {
         char buf[16] = {0};
-        bool is_v2 = (fgets(buf, sizeof(buf), f_ver) != NULL && atoi(buf) == 2);
+        bool is_v2 = false;
+        if (fgets(buf, sizeof(buf), f_ver) != NULL) {
+            char *endptr = NULL;
+            long ver = strtol(buf, &endptr, 10);
+            is_v2 = (endptr != buf && ver == 2);
+        }
         fclose(f_ver);
         if (is_v2) return true;
     }
@@ -604,7 +632,7 @@ void tpm_engine_detect_sysfs_hardware(const char *mfg, const char *vendor_str, t
     bool is_intel = false;
     bool is_crb = false;
 
-    FILE *f_hid = fopen("/sys/class/tpm/tpm0/device/firmware_node/hid", "r");
+    FILE *f_hid = fopen("/sys/class/tpm/tpm0/device/firmware_node/hid", "re");
     char hid[64] = {0};
     if (f_hid) {
         if (fgets(hid, sizeof(hid), f_hid)) {
@@ -622,14 +650,16 @@ void tpm_engine_detect_sysfs_hardware(const char *mfg, const char *vendor_str, t
     }
 
     char cpu_model[128] = {0};
-    FILE *f_cpu = fopen("/proc/cpuinfo", "r");
+    FILE *f_cpu = fopen("/proc/cpuinfo", "re");
     if (f_cpu) {
         char line[256];
         while (fgets(line, sizeof(line), f_cpu)) {
             if (strncmp(line, "model name", 10) == 0) {
                 char *colon = strchr(line, ':');
                 if (colon) {
-                    snprintf(cpu_model, sizeof(cpu_model), "%s", colon + 2);
+                    const char *val = colon + 1;
+                    while (*val == ' ' || *val == '\t') val++;
+                    snprintf(cpu_model, sizeof(cpu_model), "%s", val);
                     char *nl = strchr(cpu_model, '\n');
                     if (nl) *nl = '\0';
                 }

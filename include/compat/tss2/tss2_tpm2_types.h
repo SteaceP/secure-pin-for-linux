@@ -28,7 +28,7 @@ typedef TPM2_ALG_ID TPMI_ALG_RSA_SCHEME;
 typedef TPM2_ALG_ID TPMI_ALG_RSA_DECRYPT;
 typedef TPM2_ALG_ID TPMI_ECC_CURVE;
 typedef uint32_t  TPMA_OBJECT;
-typedef uint32_t  TPMA_SESSION;
+typedef uint8_t   TPMA_SESSION;
 typedef uint8_t   TPM2_SE;
 
 #define TPM2_MAX_DIGEST_SIZE            64
@@ -130,9 +130,9 @@ typedef struct {
 /* Return codes */
 #define TPM2_RC_SUCCESS                 0x000
 #define TPM2_RC_LOCKOUT                 0x921
-#define TPM2_RC_AUTH_FAIL               0x98E
-#define TPM2_RC_BAD_AUTH                0x922
-#define TPM2_RC_POLICY_FAIL             0x99D
+#define TPM2_RC_AUTH_FAIL               0x08E
+#define TPM2_RC_BAD_AUTH                0x0A2
+#define TPM2_RC_POLICY_FAIL             0x09D
 
 /* Generic buffer types */
 typedef struct {
