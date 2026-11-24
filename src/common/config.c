@@ -16,9 +16,11 @@ void tpm_pin_config_defaults(tpm_pin_config_t *cfg) {
     cfg->digits_only = true;
     cfg->min_length = 4;
     cfg->max_length = 32;
+    cfg->disallow_simple_pins = true;
     cfg->enable_login = true;
     cfg->enable_lockscreen = true;
     cfg->enable_sudo = true;
+    cfg->enable_polkit = true;
     cfg->enable_keyring_unlock = true;
     cfg->bind_pcr7 = false;
     cfg->da_max_tries = 5;
@@ -78,6 +80,7 @@ bool tpm_pin_config_load(const char *path, tpm_pin_config_t *cfg) {
         return true;
     }
 
+    bool saw_enable_polkit = false;
     char line[512];
     while (fgets(line, sizeof(line), f)) {
         size_t line_len = strlen(line);
@@ -113,12 +116,17 @@ bool tpm_pin_config_load(const char *path, tpm_pin_config_t *cfg) {
                 if (uval > TPM_PIN_MAX_PIN_LEN) uval = TPM_PIN_MAX_PIN_LEN;
                 cfg->max_length = uval;
             }
+        } else if (strcasecmp(key, "disallow_simple_pins") == 0) {
+            cfg->disallow_simple_pins = parse_bool(val);
         } else if (strcasecmp(key, "enable_login") == 0) {
             cfg->enable_login = parse_bool(val);
         } else if (strcasecmp(key, "enable_lockscreen") == 0) {
             cfg->enable_lockscreen = parse_bool(val);
         } else if (strcasecmp(key, "enable_sudo") == 0) {
             cfg->enable_sudo = parse_bool(val);
+        } else if (strcasecmp(key, "enable_polkit") == 0) {
+            cfg->enable_polkit = parse_bool(val);
+            saw_enable_polkit = true;
         } else if (strcasecmp(key, "enable_keyring_unlock") == 0) {
             cfg->enable_keyring_unlock = parse_bool(val);
         } else if (strcasecmp(key, "bind_pcr7") == 0) {
@@ -150,6 +158,10 @@ bool tpm_pin_config_load(const char *path, tpm_pin_config_t *cfg) {
                 snprintf(cfg->data_dir, sizeof(cfg->data_dir), "%s", val);
             }
         }
+    }
+
+    if (!saw_enable_polkit) {
+        cfg->enable_polkit = cfg->enable_sudo;
     }
 
     if (cfg->min_length < 4) cfg->min_length = 4;
@@ -225,11 +237,13 @@ bool tpm_pin_config_save(const char *path, const tpm_pin_config_t *cfg) {
     fprintf(f, "[Policy]\n");
     fprintf(f, "digits_only = %s\n", cfg->digits_only ? "true" : "false");
     fprintf(f, "min_length = %u\n", min_len);
-    fprintf(f, "max_length = %u\n\n", max_len);
+    fprintf(f, "max_length = %u\n", max_len);
+    fprintf(f, "disallow_simple_pins = %s\n\n", cfg->disallow_simple_pins ? "true" : "false");
     fprintf(f, "[Scopes]\n");
     fprintf(f, "enable_login = %s\n", cfg->enable_login ? "true" : "false");
     fprintf(f, "enable_lockscreen = %s\n", cfg->enable_lockscreen ? "true" : "false");
     fprintf(f, "enable_sudo = %s\n", cfg->enable_sudo ? "true" : "false");
+    fprintf(f, "enable_polkit = %s\n", cfg->enable_polkit ? "true" : "false");
     fprintf(f, "enable_keyring_unlock = %s\n\n", cfg->enable_keyring_unlock ? "true" : "false");
     fprintf(f, "[Security]\n");
     fprintf(f, "bind_pcr7 = %s\n", cfg->bind_pcr7 ? "true" : "false");

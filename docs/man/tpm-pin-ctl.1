@@ -1,0 +1,135 @@
+.TH TPM-PIN-CTL 1 "November 2026" "tpm-pin 1.0.9" "User Commands"
+.SH NAME
+tpm-pin-ctl \- manage TPM 2.0 hardware-backed PIN authentication
+.SH SYNOPSIS
+.B tpm-pin-ctl
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+.B tpm-pin-ctl
+is the command-line administration and enrollment tool for
+.BR pam_tpm_pin (8).
+It seals per-user master keys inside the system TPM 2.0 under a user PIN
+(optionally bound to UEFI Secure Boot PCR 7), optionally seals the user's
+verified login password for automatic GNOME Keyring / KWallet unlocking, and
+manages PAM integration and TPM Dictionary Attack (DA) protection.
+.SH COMMANDS
+.TP
+.B status [\-\-json] [\-\-user \fIusername\fP]
+Display TPM 2.0 availability, hardware architecture, PIN enrollment state,
+PCR 7 binding, keyring status, PAM integration, active policies, and live
+hardware DA lockout counters.
+.TP
+.B enroll [\-\-user \fIusername\fP]
+Enroll or re-enroll a TPM-backed PIN for the target user (requires root).
+When
+.I enable_keyring_unlock
+is enabled, prompts for the user's current login password, verifies it
+against the local shadow database when available, and seals it with AES-256-GCM
+under the TPM-protected master key.
+.TP
+.B change-pin [\-\-user \fIusername\fP]
+Verify the user's current PIN against the TPM, preserve any previously sealed
+login password, and re-seal a new PIN (requires root).
+.TP
+.B verify [\-\-user \fIusername\fP]
+Verify an enrolled PIN against the TPM 2.0 device and report whether any sealed
+keyring password can be unsealed.
+.TP
+.B remove [\-\-user \fIusername\fP]
+Securely overwrite and remove the enrolled PIN blob for the target user
+(requires root).
+.TP
+.B list [\-\-json]
+List enrolled users, UIDs, PCR 7 binding, and keyring auto-unlock flags.
+When invoked as root, lists all enrolled users on the system; otherwise reports
+only the calling user.
+.TP
+.B doctor [\-\-json] [\-\-user \fIusername\fP]
+Run diagnostic health checks covering TPM device status, DA lockout state,
+setuid helper permissions, PAM module installation and activation, Polkit
+systemd drop-in status, data directory permissions, config-vs-blob drift,
+and keyring PAM module detection. Exits 0 if no failures are detected, or 1 if
+any check fails.
+.TP
+.B pam <enable|disable [\-\-uninstall]|status>
+Enable, disable, or inspect system PAM integration across supported Linux
+distributions (Debian/Ubuntu, Fedora/RHEL/authselect, Arch Linux, openSUSE,
+and generic PAM stacks). Enabling and disabling require root.
+.TP
+.B da-reset
+Clear the TPM 2.0 Dictionary Attack lockout counter (requires root).
+.TP
+.B da-config \-\-max-tries \fIn\fP \-\-recovery-sec \fIs\fP [\-\-lockout-recovery \fIs\fP]
+Configure hardware TPM DA limits and persist them to
+.I /etc/tpm-pin/config.conf
+(requires root).
+.TP
+.B config list [\-\-json]
+Print all active configuration keys and values.
+.TP
+.B config get \fIkey\fP
+Print the current value of a single configuration key.
+.TP
+.B config set \fIkey\fP \fIvalue\fP
+Update and save a configuration key (requires root).
+.TP
+.B \-\-version\fR, \fB\-V\fR, \fBversion\fR
+Print the program version and exit.
+.SH CONFIGURATION KEYS
+Configuration is stored in
+.IR /etc/tpm-pin/config.conf :
+.TP
+.B digits_only
+Boolean. Restrict PINs to ASCII digits 0\-9 (default: \fBtrue\fP).
+.TP
+.B min_length\fR, \fBmax_length
+Integer (4\-64). Minimum and maximum PIN byte length (defaults: \fB4\fP, \fB32\fP).
+.TP
+.B disallow_simple_pins
+Boolean. Reject sequential (\fB1234\fP, \fB4321\fP) and repeating
+(\fB1212\fP, \fB123123\fP) PINs during enrollment and PIN rotation
+(default: \fBtrue\fP).
+.TP
+.B enable_login
+Boolean. Allow PIN at local display managers and console login (default: \fBtrue\fP).
+.TP
+.B enable_lockscreen
+Boolean. Allow PIN for desktop screen lockers (default: \fBtrue\fP).
+.TP
+.B enable_sudo
+Boolean. Allow PIN for \fBsudo\fP, \fBdoas\fP, and \fBsu\fP (default: \fBtrue\fP).
+.TP
+.B enable_polkit
+Boolean. Allow PIN for graphical Polkit / \fBpkexec\fP prompts (default: \fBtrue\fP).
+.TP
+.B enable_keyring_unlock
+Boolean. Seal the login password in the TPM to auto-unlock GNOME Keyring or
+KWallet on login (default: \fBtrue\fP).
+.TP
+.B bind_pcr7
+Boolean. Seal keys to UEFI Secure Boot PCR 7 (default: \fBfalse\fP).
+.TP
+.B da_max_tries\fR, \fBda_recovery_time\fR, \fBda_lockout_recovery
+Integers controlling TPM hardware anti-hammering thresholds and cooldowns
+(defaults: \fB5\fP, \fB600\fP, \fB86400\fP).
+.TP
+.B tcti_name\fR, \fBdata_dir
+Optional TCTI override string and credential storage directory
+(default: \fI/var/lib/tpm-pin\fP).
+.SH FILES
+.TP
+.I /etc/tpm-pin/config.conf
+System-wide configuration file.
+.TP
+.I /var/lib/tpm-pin/<uid>/sealed.blob
+Root-only (\fB0600\fP) TPM-sealed master key and AES-256-GCM payload.
+.TP
+.I /var/lib/tpm-pin/<uid>/sealed.meta
+Non-sensitive enrollment flags (\fB0644\fP) for unprivileged status queries.
+.SH EXIT STATUS
+Returns \fB0\fP on success and non-zero on failure. For \fBdoctor\fP, returns
+\fB1\fP if one or more checks report \fBfail\fP.
+.SH SEE ALSO
+.BR pam_tpm_pin (8),
+.BR tpm-pin-settings (1)

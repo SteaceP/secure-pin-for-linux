@@ -21,6 +21,14 @@ BUILD_DIR ?= build
 # Libraries detection
 LDLIBS_CRYPTO := -lcrypto
 
+ifeq ($(shell printf '#include <crypt.h>\nint main(void){return 0;}\n' | $(CC) -x c - -lcrypt -o /dev/null 2>/dev/null && echo ok),ok)
+LDLIBS_CRYPT := -lcrypt
+CFLAGS_CRYPT := -DHAVE_LIBCRYPT=1
+else
+LDLIBS_CRYPT :=
+CFLAGS_CRYPT :=
+endif
+
 ifeq ($(shell $(CC) -lpam -shared -o /dev/null 2>/dev/null && echo ok),ok)
 LDLIBS_PAM := -lpam
 else ifneq ($(wildcard /usr/lib64/libpam.so.0),)
@@ -113,17 +121,18 @@ $(BUILD_DIR)/pam_tpm_pin.so: src/pam/pam_tpm_pin.c $(COMMON_OBJS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -shared -Wl,--no-undefined -DTPM_PIN_VERIFY_PATH=\"$(LIBEXECDIR)/tpm-pin-verify\" \
 		src/pam/pam_tpm_pin.c $(COMMON_OBJS) -o $@ $(LDLIBS_CRYPTO) $(LDLIBS_PAM) $(LDLIBS_TSS2)
 
-$(BUILD_DIR)/tpm-pin-ctl: src/cli/tpm_pin_ctl.c $(COMMON_OBJS) | $(BUILD_DIR)
+$(BUILD_DIR)/tpm-pin-ctl: src/cli/tpm_pin_ctl.c src/common/password_verify.c $(COMMON_OBJS) | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) src/cli/tpm_pin_ctl.c $(COMMON_OBJS) -o $@ $(LDLIBS_CRYPTO) $(LDLIBS_PAM) $(LDLIBS_TSS2)
+	$(CC) $(CFLAGS) $(CFLAGS_CRYPT) -DTPM_PIN_VERIFY_PATH=\"$(LIBEXECDIR)/tpm-pin-verify\" \
+		src/cli/tpm_pin_ctl.c src/common/password_verify.c $(COMMON_OBJS) -o $@ $(LDLIBS_CRYPTO) $(LDLIBS_PAM) $(LDLIBS_TSS2) $(LDLIBS_CRYPT)
 
 $(BUILD_DIR)/tpm-pin-verify: src/cli/tpm_pin_verify.c $(COMMON_OBJS) | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) src/cli/tpm_pin_verify.c $(COMMON_OBJS) -o $@ $(LDLIBS_CRYPTO) $(LDLIBS_TSS2)
 
-$(BUILD_DIR)/test_pam_harness: tests/test_pam_harness.c $(COMMON_OBJS) | $(BUILD_DIR)
+$(BUILD_DIR)/test_pam_harness: tests/test_pam_harness.c src/common/password_verify.c $(COMMON_OBJS) | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) tests/test_pam_harness.c $(COMMON_OBJS) -o $@ $(LDLIBS_CRYPTO) $(LDLIBS_PAM) $(LDLIBS_TSS2)
+	$(CC) $(CFLAGS) $(CFLAGS_CRYPT) tests/test_pam_harness.c src/common/password_verify.c $(COMMON_OBJS) -o $@ $(LDLIBS_CRYPTO) $(LDLIBS_PAM) $(LDLIBS_TSS2) $(LDLIBS_CRYPT)
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -150,3 +159,15 @@ install: all
 	install -m 0644 gui/icons/hicolor/symbolic/apps/io.github.securepin.Settings-symbolic.svg $(DESTDIR)$(DATADIR)/icons/hicolor/symbolic/apps/
 	install -d $(DESTDIR)$(DATADIR)/metainfo
 	install -m 0644 gui/io.github.securepin.Settings.metainfo.xml $(DESTDIR)$(DATADIR)/metainfo/
+	install -d $(DESTDIR)$(DATADIR)/man/man1
+	install -m 0644 docs/man/tpm-pin-ctl.1 $(DESTDIR)$(DATADIR)/man/man1/tpm-pin-ctl.1
+	install -d $(DESTDIR)$(DATADIR)/man/man8
+	install -m 0644 docs/man/pam_tpm_pin.8 $(DESTDIR)$(DATADIR)/man/man8/pam_tpm_pin.8
+	install -d $(DESTDIR)$(DATADIR)/bash-completion/completions
+	install -m 0644 packaging/completions/tpm-pin-ctl.bash $(DESTDIR)$(DATADIR)/bash-completion/completions/tpm-pin-ctl
+	install -d $(DESTDIR)$(DATADIR)/zsh/site-functions
+	install -m 0644 packaging/completions/_tpm-pin-ctl $(DESTDIR)$(DATADIR)/zsh/site-functions/_tpm-pin-ctl
+	install -d $(DESTDIR)$(DATADIR)/fish/vendor_completions.d
+	install -m 0644 packaging/completions/tpm-pin-ctl.fish $(DESTDIR)$(DATADIR)/fish/vendor_completions.d/tpm-pin-ctl.fish
+	install -d $(DESTDIR)$(DATADIR)/gnome-shell/extensions/secure-pin@coderage.pro
+	install -m 0644 gui/gnome-extension/extension.js gui/gnome-extension/metadata.json $(DESTDIR)$(DATADIR)/gnome-shell/extensions/secure-pin@coderage.pro/

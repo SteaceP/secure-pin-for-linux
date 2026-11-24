@@ -9,6 +9,9 @@
 #include <security/pam_appl.h>
 #include <security/pam_modules.h>
 #include <dlfcn.h>
+#ifdef HAVE_LIBCRYPT
+#include <crypt.h>
+#endif
 #include "tpm_pin.h"
 
 static int test_count = 0;
@@ -33,24 +36,46 @@ static bool test_policy_validation(void) {
     cfg.max_length = 8;
 
     char err[256];
-    /* Valid 6-digit PIN */
-    if (!tpm_pin_validate_pin("123456", &cfg, err, sizeof(err))) return false;
+    /* Valid non-trivial 6-digit PIN */
+    if (!tpm_pin_validate_pin("849201", &cfg, err, sizeof(err))) return false;
 
     /* Too short */
     if (tpm_pin_validate_pin("123", &cfg, err, sizeof(err))) return false;
 
     /* Too long */
-    if (tpm_pin_validate_pin("123456789", &cfg, err, sizeof(err))) return false;
+    if (tpm_pin_validate_pin("849201739", &cfg, err, sizeof(err))) return false;
 
     /* Contains non-digit */
-    if (tpm_pin_validate_pin("123a56", &cfg, err, sizeof(err))) return false;
+    if (tpm_pin_validate_pin("849a01", &cfg, err, sizeof(err))) return false;
 
     /* All identical */
     if (tpm_pin_validate_pin("777777", &cfg, err, sizeof(err))) return false;
 
+    /* Sequential and repeating PINs rejected when disallow_simple_pins is true */
+    if (tpm_pin_validate_pin("123456", &cfg, err, sizeof(err))) return false;
+    if (tpm_pin_validate_pin("0123", &cfg, err, sizeof(err))) return false;
+    if (tpm_pin_validate_pin("654321", &cfg, err, sizeof(err))) return false;
+    if (tpm_pin_validate_pin("1212", &cfg, err, sizeof(err))) return false;
+    if (tpm_pin_validate_pin("123123", &cfg, err, sizeof(err))) return false;
+    if (tpm_pin_validate_pin("12121", &cfg, err, sizeof(err))) return false;
+
+    /* PAM candidate classifier MUST still accept sequential/repeating PINs for legacy users */
+    if (!tpm_pin_is_likely_pin("123456", &cfg)) return false;
+    if (!tpm_pin_is_likely_pin("1212", &cfg)) return false;
+
+    /* Sequential/repeating allowed only when disallow_simple_pins is false */
+    cfg.disallow_simple_pins = false;
+    if (!tpm_pin_validate_pin("123456", &cfg, err, sizeof(err))) return false;
+    if (!tpm_pin_validate_pin("1212", &cfg, err, sizeof(err))) return false;
+    /* All-identical remains blocked even when disallow_simple_pins is false */
+    if (tpm_pin_validate_pin("7777", &cfg, err, sizeof(err))) return false;
+
     /* Alphanumeric mode */
+    cfg.disallow_simple_pins = true;
     cfg.digits_only = false;
     if (!tpm_pin_validate_pin("p1n_C0de", &cfg, err, sizeof(err))) return false;
+    if (tpm_pin_validate_pin("abcd", &cfg, err, sizeof(err))) return false;
+    if (tpm_pin_validate_pin("ababab", &cfg, err, sizeof(err))) return false;
 
     /* Control characters must be rejected even in alphanumeric mode */
     if (tpm_pin_validate_pin("p1n\n123", &cfg, err, sizeof(err))) return false;
@@ -103,8 +128,11 @@ static bool test_config_serialization(void) {
     cfg.digits_only = false;
     cfg.min_length = 6;
     cfg.max_length = 16;
+    cfg.disallow_simple_pins = false;
     cfg.enable_sudo = false;
+    cfg.enable_polkit = true;
     cfg.bind_pcr7 = true;
+    cfg.da_lockout_recovery = 43200;
 
     char tmp_conf[256];
     snprintf(tmp_conf, sizeof(tmp_conf), "/tmp/test_tpm_pin_config_%d.conf", (int)getpid());
@@ -120,11 +148,24 @@ static bool test_config_serialization(void) {
     if (loaded.digits_only != false) return false;
     if (loaded.min_length != 6) return false;
     if (loaded.max_length != 16) return false;
+    if (loaded.disallow_simple_pins != false) return false;
     if (loaded.enable_sudo != false) return false;
+    if (loaded.enable_polkit != true) return false;
     if (loaded.bind_pcr7 != true) return false;
+    if (loaded.da_lockout_recovery != 43200) return false;
+
+    /* Legacy config without enable_polkit must inherit enable_sudo */
+    FILE *cf = fopen(tmp_conf, "w");
+    if (!cf) return false;
+    fprintf(cf, "enable_sudo = false\n");
+    fclose(cf);
+
+    bool ok_legacy = tpm_pin_config_load(tmp_conf, &loaded);
+    unlink(tmp_conf);
+    if (!ok_legacy || loaded.enable_sudo != false || loaded.enable_polkit != false) return false;
 
     /* Test inline comments and min_length upper clamping */
-    FILE *cf = fopen(tmp_conf, "w");
+    cf = fopen(tmp_conf, "w");
     if (!cf) return false;
     fprintf(cf, "digits_only = true # inline comment\nmin_length = 100\nmax_length = 12\n");
     fclose(cf);
@@ -788,23 +829,203 @@ static bool test_pam_service_allowlist(void) {
     if (!tpm_pin_is_service_enabled("hyprlock", true, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("swaylock", true, &cfg)) return false;
 
-    /* Sudo / doas / su-l / polkit follow enable_sudo and must reject unprivileged spoofing */
+    /* Sudo / doas / su-l follow enable_sudo; Polkit / pkexec follow enable_polkit */
     cfg.enable_sudo = true;
+    cfg.enable_polkit = false;
     if (!tpm_pin_is_service_enabled("sudo", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("sudo", true, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("doas", false, &cfg)) return false;
     if (!tpm_pin_is_service_enabled("su-l", false, &cfg)) return false;
-    if (!tpm_pin_is_service_enabled("polkit-1", false, &cfg)) return false;
-    if (tpm_pin_is_service_enabled("polkit-1", true, &cfg)) return false;
-    if (!tpm_pin_is_service_enabled("polkit", false, &cfg)) return false;
-    if (!tpm_pin_is_service_enabled("pkexec", false, &cfg)) return false;
-    cfg.enable_sudo = false;
-    if (tpm_pin_is_service_enabled("sudo", false, &cfg)) return false;
-    if (tpm_pin_is_service_enabled("doas", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("polkit-1", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("polkit", false, &cfg)) return false;
     if (tpm_pin_is_service_enabled("pkexec", false, &cfg)) return false;
 
+    cfg.enable_sudo = false;
+    cfg.enable_polkit = true;
+    if (tpm_pin_is_service_enabled("sudo", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("doas", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("polkit-1", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("polkit-1", true, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("polkit", false, &cfg)) return false;
+    if (!tpm_pin_is_service_enabled("pkexec", false, &cfg)) return false;
+
+    cfg.enable_polkit = false;
+    if (tpm_pin_is_service_enabled("polkit-1", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("polkit", false, &cfg)) return false;
+    if (tpm_pin_is_service_enabled("pkexec", false, &cfg)) return false;
+
+    return true;
+}
+
+static bool test_shadow_password_verification(void) {
+    /* Locked, disabled, placeholder, or invalid shadow hashes must return -1 */
+    if (tpm_pin_verify_shadow_hash("pass", "!") != -1) return false;
+    if (tpm_pin_verify_shadow_hash("pass", "!!") != -1) return false;
+    if (tpm_pin_verify_shadow_hash("pass", "*") != -1) return false;
+    if (tpm_pin_verify_shadow_hash("pass", "x") != -1) return false;
+    if (tpm_pin_verify_shadow_hash("pass", "") != -1) return false;
+    if (tpm_pin_verify_shadow_hash("pass", "short") != -1) return false;
+
+#ifdef HAVE_LIBCRYPT
+    struct crypt_data *cdata = (struct crypt_data *)calloc(1, sizeof(struct crypt_data));
+    if (!cdata) return false;
+    const char *computed = crypt_r("MySecretPass99!", "$6$testsalt1234567$", cdata);
+    if (!computed || computed[0] == '*') {
+        tpm_pin_zero(cdata, sizeof(*cdata));
+        free(cdata);
+        return false;
+    }
+    char hash_copy[256];
+    snprintf(hash_copy, sizeof(hash_copy), "%s", computed);
+    tpm_pin_zero(cdata, sizeof(*cdata));
+    free(cdata);
+
+    if (tpm_pin_verify_shadow_hash("MySecretPass99!", hash_copy) != 1) return false;
+    if (tpm_pin_verify_shadow_hash("WrongPassword!", hash_copy) != 0) return false;
+#endif
+    return true;
+}
+
+static bool test_tpm_change_pin_and_list(void) {
+    tpm_pin_config_t cfg;
+    tpm_pin_config_defaults(&cfg);
+
+    const char *tcti_env = getenv("TCTI");
+    if (tcti_env) {
+        snprintf(cfg.tcti_name, sizeof(cfg.tcti_name), "%s", tcti_env);
+    }
+    snprintf(cfg.data_dir, sizeof(cfg.data_dir), "/tmp/test_tpm_change_%d", (int)getpid());
+
+    uid_t uid1 = 9991;
+    uid_t uid2 = 9992;
+    tpm_pin_remove_user(uid1, &cfg);
+    tpm_pin_remove_user(uid2, &cfg);
+
+    /* Enroll uid2 first (out of order) to also verify sorted listing */
+    cfg.bind_pcr7 = true;
+    bool ok2 = tpm_pin_enroll_user(uid2, "593714", NULL, &cfg);
+    if (!ok2) {
+        if (tcti_env || access("/dev/tpmrm0", R_OK | W_OK) == 0) {
+            return false;
+        }
+        return true; /* Skip gracefully only if no TPM is accessible */
+    }
+
+    cfg.bind_pcr7 = false;
+    if (!tpm_pin_enroll_user(uid1, "849201", "PwdOne!", &cfg)) {
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    uid_t listed[16] = {0};
+    size_t n = tpm_pin_list_enrolled_users(&cfg, listed, 16);
+    if (n != 2 || listed[0] != uid1 || listed[1] != uid2) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    bool pcr7 = true, keyring = false;
+    if (!tpm_pin_get_user_enrollment_flags(uid1, &cfg, &pcr7, &keyring) || pcr7 || !keyring) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+    if (!tpm_pin_get_user_enrollment_flags(uid2, &cfg, &pcr7, &keyring) || !pcr7 || keyring) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    /* Wrong old PIN must fail while leaving original PIN intact */
+    int tpm_rc = 0;
+    if (tpm_pin_change_pin(uid1, "000000", "472910", NULL, &cfg, &tpm_rc)) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    /* Weak new PIN must be rejected by policy before touching TPM */
+    if (tpm_pin_change_pin(uid1, "849201", "123456", NULL, &cfg, &tpm_rc)) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    /* Rotate PIN with updated PCR 7 binding and carry over keyring password */
+    cfg.bind_pcr7 = true;
+    if (!tpm_pin_change_pin(uid1, "849201", "472910", NULL, &cfg, &tpm_rc)) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    char unsealed[TPM_PIN_MAX_PASSWORD_LEN] = {0};
+    if (tpm_pin_verify_user(uid1, "849201", &cfg, unsealed, sizeof(unsealed), &tpm_rc)) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+    if (!tpm_pin_verify_user(uid1, "472910", &cfg, unsealed, sizeof(unsealed), &tpm_rc) ||
+        strcmp(unsealed, "PwdOne!") != 0) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    if (!tpm_pin_get_user_enrollment_flags(uid1, &cfg, &pcr7, &keyring) || !pcr7 || !keyring) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    /* Tighten policy after enrolling a 4-digit PIN and verify rotation to 6-digit PIN works */
+    if (!tpm_pin_change_pin(uid1, "472910", "4829", NULL, &cfg, &tpm_rc)) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+    cfg.min_length = 6;
+    if (tpm_pin_change_pin(uid1, "4829", "5913", NULL, &cfg, &tpm_rc)) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+    if (!tpm_pin_change_pin(uid1, "4829", "739150", NULL, &cfg, &tpm_rc)) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+    if (!tpm_pin_verify_user(uid1, "739150", &cfg, unsealed, sizeof(unsealed), &tpm_rc) ||
+        strcmp(unsealed, "PwdOne!") != 0) {
+        tpm_pin_remove_user(uid1, &cfg);
+        tpm_pin_remove_user(uid2, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    ESYS_CONTEXT *esys = NULL;
+    if (tpm_engine_init(cfg.tcti_name, &esys) == TSS2_RC_SUCCESS && esys) {
+        (void)tpm_engine_reset_da_lockout(esys);
+        tpm_engine_destroy(&esys);
+    }
+
+    tpm_pin_remove_user(uid1, &cfg);
+    tpm_pin_remove_user(uid2, &cfg);
+    rmdir(cfg.data_dir);
     return true;
 }
 
@@ -820,7 +1041,9 @@ int main(int argc, char **argv) {
     RUN_TEST("Desktop & PAM Service Allowlist", test_pam_service_allowlist);
     RUN_TEST("AES-256-GCM + PBKDF2 Crypto Roundtrip", test_crypto_roundtrip);
     RUN_TEST("Configuration Serialization", test_config_serialization);
+    RUN_TEST("Shadow Password Hash Verification", test_shadow_password_verification);
     RUN_TEST("TPM 2.0 User Enrollment & Unsealing", test_tpm_enroll_and_verify);
+    RUN_TEST("TPM 2.0 PIN Rotation & Enrolled User Listing", test_tpm_change_pin_and_list);
     RUN_TEST("TPM 2.0 PCR 7 Binding & Authentication", test_tpm_enroll_and_verify_pcr7);
 
     printf("\nTest Summary: %d / %d tests passed.\n", pass_count, test_count);

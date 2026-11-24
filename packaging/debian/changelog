@@ -1,3 +1,13 @@
+tpm-pin (1.0.9-1) unstable; urgency=medium
+
+  * Add PIN rotation (change-pin), enrolled user listing (list), config listing, --version, and comprehensive doctor diagnostics.
+  * Verify local login passwords against shadow hashes before sealing for desktop keyring auto-unlock.
+  * Separate graphical Polkit scope (enable_polkit) from sudo and block simple sequential/repeating PINs (disallow_simple_pins).
+  * Upgrade GTK4/Libadwaita Settings app with Test PIN, Change PIN, hardware DA policy controls, actionable banners, Diagnostics tab, and About dialog.
+  * Enhance GNOME Shell Quick Settings extension with async live status, and ship man pages plus bash/zsh/fish shell completions.
+
+ -- Secure PIN Maintainers <steace@coderage.pro>  Tue, 24 Nov 2026 11:35:00 -0500
+
 tpm-pin (1.0.8-1) unstable; urgency=high
 
   * Remove unprivileged udev uaccess rule on /dev/tpmrm* and enforce root privileges for DA reset/config and PAM management.

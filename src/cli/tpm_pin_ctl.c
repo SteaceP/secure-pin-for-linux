@@ -2,11 +2,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <signal.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <pwd.h>
 #include <termios.h>
 #include <getopt.h>
@@ -42,10 +44,12 @@ static char *read_secret(const char *prompt) {
     bool has_term = false;
     bool echo_changed = false;
 
-    printf("%s", prompt);
-    fflush(stdout);
-
     bool is_tty = isatty(STDIN_FILENO);
+    if (is_tty) {
+        printf("%s", prompt);
+        fflush(stdout);
+    }
+
     if (is_tty && disable_echo(&orig)) {
         saved_orig_termios = orig;
         echo_disabled_flag = 1;
@@ -184,18 +188,62 @@ static void print_json_escaped(const char *s) {
     putchar('"');
 }
 
+typedef struct {
+    const char *id;
+    const char *title;
+    const char *status; /* "pass", "warn", "fail", "info" */
+    char detail[384];
+} diag_check_t;
+
+__attribute__((format(printf, 7, 8)))
+static void diag_add(diag_check_t *checks, size_t *count, size_t cap,
+                     const char *id, const char *title, const char *status,
+                     const char *fmt, ...) {
+    if (!checks || !count || *count >= cap) return;
+    diag_check_t *c = &checks[*count];
+    c->id = id;
+    c->title = title;
+    c->status = status;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(c->detail, sizeof(c->detail), fmt, ap);
+    va_end(ap);
+    (*count)++;
+}
+
+static bool file_mode_ok_executable_root(const char *path, bool require_setuid,
+                                         struct stat *st_out, bool *found_out) {
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        if (found_out) *found_out = false;
+        return false;
+    }
+    if (found_out) *found_out = true;
+    if (st_out) *st_out = st;
+    if (!S_ISREG(st.st_mode)) return false;
+    if (st.st_uid != 0) return false;
+    if ((st.st_mode & (S_IWGRP | S_IWOTH)) != 0) return false;
+    if (require_setuid && (st.st_mode & S_ISUID) == 0) return false;
+    return true;
+}
+
 static void print_usage(const char *prog) {
-    printf("Secure PIN for Linux (TPM 2.0 Windows Hello–Style PIN)\n\n");
+    printf("Secure PIN for Linux %s (TPM 2.0 Windows Hello–Style PIN)\n\n", TPM_PIN_APP_VERSION);
     printf("Usage:\n");
     printf("  %s status [--json] [--user <username>]\n", prog);
     printf("  %s enroll [--user <username>]\n", prog);
+    printf("  %s change-pin [--user <username>]\n", prog);
     printf("  %s verify [--user <username>]\n", prog);
     printf("  %s remove [--user <username>]\n", prog);
+    printf("  %s list [--json]\n", prog);
+    printf("  %s doctor [--json] [--user <username>]\n", prog);
     printf("  %s pam <enable|disable [--uninstall]|status>\n", prog);
     printf("  %s da-reset\n", prog);
     printf("  %s da-config --max-tries <n> --recovery-sec <s> [--lockout-recovery <s>]\n", prog);
+    printf("  %s config list [--json]\n", prog);
     printf("  %s config get <key>\n", prog);
     printf("  %s config set <key> <value>\n", prog);
+    printf("  %s --version\n", prog);
 }
 
 int main(int argc, char **argv) {
@@ -206,6 +254,16 @@ int main(int argc, char **argv) {
     if (argc < 2) {
         print_usage(argv[0]);
         return 1;
+    }
+
+    if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0 || strcmp(argv[1], "version") == 0) {
+        printf("tpm-pin-ctl %s\n", TPM_PIN_APP_VERSION);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "help") == 0) {
+        print_usage(argv[0]);
+        return 0;
     }
 
     const char *action = argv[1];
@@ -325,6 +383,9 @@ int main(int argc, char **argv) {
 
         if (json_output) {
             printf("{\n");
+            printf("  \"version\": ");
+            print_json_escaped(TPM_PIN_APP_VERSION);
+            printf(",\n");
             printf("  \"tpm_present\": %s,\n", status.tpm_present ? "true" : "false");
             printf("  \"tpm_accessible\": %s,\n", status.tpm_accessible ? "true" : "false");
             printf("  \"tpm_manufacturer\": ");
@@ -354,11 +415,14 @@ int main(int argc, char **argv) {
             printf("  \"digits_only\": %s,\n", cfg.digits_only ? "true" : "false");
             printf("  \"min_length\": %u,\n", cfg.min_length);
             printf("  \"max_length\": %u,\n", cfg.max_length);
+            printf("  \"disallow_simple_pins\": %s,\n", cfg.disallow_simple_pins ? "true" : "false");
             printf("  \"da_max_tries\": %u,\n", cfg.da_max_tries);
             printf("  \"da_recovery_time\": %u,\n", cfg.da_recovery_time);
+            printf("  \"da_lockout_recovery\": %u,\n", cfg.da_lockout_recovery);
             printf("  \"enable_login\": %s,\n", cfg.enable_login ? "true" : "false");
             printf("  \"enable_lockscreen\": %s,\n", cfg.enable_lockscreen ? "true" : "false");
             printf("  \"enable_sudo\": %s,\n", cfg.enable_sudo ? "true" : "false");
+            printf("  \"enable_polkit\": %s,\n", cfg.enable_polkit ? "true" : "false");
             printf("  \"enable_keyring_unlock\": %s\n", cfg.enable_keyring_unlock ? "true" : "false");
             printf("}\n");
         } else {
@@ -368,7 +432,7 @@ int main(int argc, char **argv) {
             } else if (status.tpm_present) {
                 tpm_state_str = "Detected (Hardware protected — run with sudo or activate PAM)";
             }
-            printf("=== Secure PIN for Linux Status ===\n");
+            printf("=== Secure PIN for Linux v%s Status ===\n", TPM_PIN_APP_VERSION);
             printf("TPM 2.0 Device:         %s\n", tpm_state_str);
             printf("Hardware Security:      %s\n", status.hardware_type[0] ? status.hardware_type : "TPM 2.0");
             printf("Bus Protection:         %s\n", status.bus_encryption[0] ? status.bus_encryption : "Active");
@@ -379,11 +443,18 @@ int main(int argc, char **argv) {
             printf("PAM Integration:        %s (Detected Distro: %s)\n",
                    pam_active ? "Active" : "Inactive (Run: sudo tpm-pin-ctl pam enable)",
                    pam_manager_distro_name(distro));
-            printf("PIN Policy:             %s (Length: %u - %u)\n",
+            printf("PIN Policy:             %s (Length: %u - %u, Simple PINs: %s)\n",
                    cfg.digits_only ? "Digits-only" : "Alphanumeric",
-                   cfg.min_length, cfg.max_length);
-            printf("TPM DA Lockout Max:     %u failed attempts (cooldown: %u sec)\n",
-                   cfg.da_max_tries, cfg.da_recovery_time);
+                   cfg.min_length, cfg.max_length,
+                   cfg.disallow_simple_pins ? "Blocked" : "Allowed");
+            printf("Enabled Scopes:         login=%s, lockscreen=%s, sudo=%s, polkit=%s, keyring=%s\n",
+                   cfg.enable_login ? "on" : "off",
+                   cfg.enable_lockscreen ? "on" : "off",
+                   cfg.enable_sudo ? "on" : "off",
+                   cfg.enable_polkit ? "on" : "off",
+                   cfg.enable_keyring_unlock ? "on" : "off");
+            printf("TPM DA Lockout Max:     %u failed attempts (cooldown: %u sec, lockout recovery: %u sec)\n",
+                   cfg.da_max_tries, cfg.da_recovery_time, cfg.da_lockout_recovery);
             if (status.tpm_present && status.tpm_accessible) {
                 printf("TPM Hardware DA State:  %s (%u / %u failed tries)\n",
                        status.is_locked_out ? "LOCKED OUT" : "Ready",
@@ -440,6 +511,19 @@ int main(int argc, char **argv) {
             }
         }
 
+        if (pwd && pwd[0] != '\0' && username) {
+            int pw_res = tpm_pin_verify_system_password(username, pwd);
+            if (pw_res == 0) {
+                fprintf(stderr, "Error: Current login password is incorrect.\n");
+                tpm_pin_zero(pwd, strlen(pwd));
+                free(pwd);
+                goto cleanup;
+            } else if (pw_res < 0) {
+                fprintf(stderr, "Note: Local shadow hash unavailable for user '%s'; skipping local login password check.\n",
+                        username);
+            }
+        }
+
         if (opt_pin_buf) {
             pin = strdup(opt_pin_buf);
         } else {
@@ -486,7 +570,109 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
+    if (strcmp(action, "change-pin") == 0) {
+        if (geteuid() != 0) {
+            fprintf(stderr, "Error: Root privileges required. Run with sudo or pkexec.\n");
+            goto cleanup;
+        }
+        tpm_pin_status_t status;
+        if (tpm_pin_get_user_status(uid, &cfg, &status)) {
+            if (!status.tpm_present) {
+                fprintf(stderr, "Error: TPM 2.0 device was not detected on this system.\n");
+                goto cleanup;
+            }
+            if (!status.tpm_accessible) {
+                fprintf(stderr, "Error: TPM 2.0 device is present, but permission was denied (/dev/tpmrm0).\n");
+                goto cleanup;
+            }
+        }
+        if (!tpm_pin_user_is_enrolled(uid, &cfg)) {
+            fprintf(stderr, "Error: No enrolled PIN found for user %s. Run 'enroll' first.\n",
+                    username ? username : "unknown");
+            goto cleanup;
+        }
+
+        char *old_pin = read_secret("Enter current PIN: ");
+        if (!old_pin || old_pin[0] == '\0') {
+            fprintf(stderr, "Error: Current PIN is required.\n");
+            if (old_pin) { tpm_pin_zero(old_pin, strlen(old_pin)); free(old_pin); }
+            goto cleanup;
+        }
+
+        char *new_pin = NULL;
+        if (opt_pin_buf) {
+            new_pin = strdup(opt_pin_buf);
+        } else {
+            new_pin = read_secret("Enter new PIN: ");
+            char *confirm = read_secret("Confirm new PIN: ");
+            if (!confirm || !new_pin || strcmp(new_pin, confirm) != 0) {
+                fprintf(stderr, "Error: New PINs do not match.\n");
+                tpm_pin_zero(old_pin, strlen(old_pin)); free(old_pin);
+                if (new_pin) { tpm_pin_zero(new_pin, strlen(new_pin)); free(new_pin); }
+                if (confirm) { tpm_pin_zero(confirm, strlen(confirm)); free(confirm); }
+                goto cleanup;
+            }
+            tpm_pin_zero(confirm, strlen(confirm));
+            free(confirm);
+        }
+
+        if (!new_pin) {
+            tpm_pin_zero(old_pin, strlen(old_pin));
+            free(old_pin);
+            goto cleanup;
+        }
+
+        char err[256];
+        if (!tpm_pin_validate_pin(new_pin, &cfg, err, sizeof(err))) {
+            fprintf(stderr, "Policy Error: %s\n", err);
+            tpm_pin_zero(old_pin, strlen(old_pin)); free(old_pin);
+            tpm_pin_zero(new_pin, strlen(new_pin)); free(new_pin);
+            goto cleanup;
+        }
+
+        if (opt_pwd_buf && opt_pwd_buf[0] != '\0' && cfg.enable_keyring_unlock && username) {
+            int pw_res = tpm_pin_verify_system_password(username, opt_pwd_buf);
+            if (pw_res == 0) {
+                fprintf(stderr, "Error: Current login password is incorrect.\n");
+                tpm_pin_zero(old_pin, strlen(old_pin)); free(old_pin);
+                tpm_pin_zero(new_pin, strlen(new_pin)); free(new_pin);
+                goto cleanup;
+            } else if (pw_res < 0) {
+                fprintf(stderr, "Note: Local shadow hash unavailable for user '%s'; skipping local login password check.\n",
+                        username);
+            }
+        }
+
+        printf("Verifying current PIN and re-sealing new PIN into TPM 2.0...\n");
+        int tpm_rc = 0;
+        bool ok = tpm_pin_change_pin(uid, old_pin, new_pin, opt_pwd_buf, &cfg, &tpm_rc);
+
+        tpm_pin_zero(old_pin, strlen(old_pin));
+        free(old_pin);
+        tpm_pin_zero(new_pin, strlen(new_pin));
+        free(new_pin);
+
+        if (ok) {
+            printf("Success: PIN successfully changed and re-sealed in TPM 2.0!\n");
+            exit_code = 0;
+        } else if (tpm_pin_rc_is_lockout((uint32_t)tpm_rc)) {
+            fprintf(stderr, "Error: TPM Dictionary Attack lockout is active. Reset lockout or wait for cooldown.\n");
+        } else if (tpm_pin_rc_is_policy_fail((uint32_t)tpm_rc)) {
+            fprintf(stderr, "Error: Secure Boot (PCR 7) state changed. Re-enroll your PIN using 'enroll'.\n");
+        } else if (tpm_rc != 0) {
+            fprintf(stderr, "Error: Failed to verify current PIN or re-seal (TPM code: 0x%x).\n", tpm_rc);
+        } else {
+            fprintf(stderr, "Error: Current PIN is invalid or does not match policy format.\n");
+        }
+        goto cleanup;
+    }
+
     if (strcmp(action, "verify") == 0) {
+        if (!tpm_pin_user_is_enrolled(uid, &cfg)) {
+            fprintf(stderr, "Verification FAILED: No PIN enrolled for user %s.\n", username ? username : "unknown");
+            goto cleanup;
+        }
+
         char *pin = opt_pin_buf ? strdup(opt_pin_buf) : read_secret("Enter PIN to verify: ");
         if (!pin) goto cleanup;
 
@@ -508,9 +694,399 @@ int main(int argc, char **argv) {
             exit_code = 0;
         } else if (geteuid() != 0 && tpm_rc == 0) {
             fprintf(stderr, "Verification FAILED: Root privileges (sudo) are required to access sealed credential blobs.\n");
+        } else if (geteuid() == 0 && tpm_rc == 0) {
+            fprintf(stderr, "Verification FAILED: Input does not match current PIN policy format (length or character rules).\n");
+        } else if (tpm_pin_rc_is_lockout((uint32_t)tpm_rc)) {
+            fprintf(stderr, "Verification FAILED: TPM Dictionary Attack lockout is active (TPM code: 0x%x).\n", tpm_rc);
+        } else if (tpm_pin_rc_is_policy_fail((uint32_t)tpm_rc)) {
+            fprintf(stderr, "Verification FAILED: Secure Boot (PCR 7) state changed (TPM code: 0x%x). Re-enroll your PIN.\n", tpm_rc);
         } else {
             fprintf(stderr, "Verification FAILED: Invalid PIN (TPM code: 0x%x).\n", tpm_rc);
         }
+        goto cleanup;
+    }
+
+    if (strcmp(action, "list") == 0) {
+        uid_t uids[256];
+        size_t count = 0;
+        bool is_root = (geteuid() == 0);
+        if (is_root) {
+            count = tpm_pin_list_enrolled_users(&cfg, uids, sizeof(uids) / sizeof(uids[0]));
+        } else if (tpm_pin_user_is_enrolled(uid, &cfg)) {
+            uids[0] = uid;
+            count = 1;
+        }
+
+        if (json_output) {
+            printf("[\n");
+            for (size_t i = 0; i < count; i++) {
+                char uname[128] = {0};
+                bool pcr7 = false;
+                bool keyring = false;
+                (void)lookup_user_by_uid(uids[i], uname, sizeof(uname));
+                (void)tpm_pin_get_user_enrollment_flags(uids[i], &cfg, &pcr7, &keyring);
+                printf("  {\n");
+                printf("    \"user\": ");
+                print_json_escaped(uname[0] ? uname : "unknown");
+                printf(",\n");
+                printf("    \"uid\": %u,\n", (unsigned int)uids[i]);
+                printf("    \"pcr7_bound\": %s,\n", pcr7 ? "true" : "false");
+                printf("    \"keyring_pwd_saved\": %s\n", keyring ? "true" : "false");
+                printf("  }%s\n", (i + 1 < count) ? "," : "");
+            }
+            printf("]\n");
+        } else {
+            if (count == 0) {
+                printf("No enrolled PIN users found%s.\n",
+                       is_root ? "" : " for current user");
+            } else {
+                printf("%-20s %-10s %-12s %s\n", "USER", "UID", "PCR7_BOUND", "KEYRING_PWD");
+                for (size_t i = 0; i < count; i++) {
+                    char uname[128] = {0};
+                    bool pcr7 = false;
+                    bool keyring = false;
+                    (void)lookup_user_by_uid(uids[i], uname, sizeof(uname));
+                    (void)tpm_pin_get_user_enrollment_flags(uids[i], &cfg, &pcr7, &keyring);
+                    printf("%-20s %-10u %-12s %s\n",
+                           uname[0] ? uname : "unknown",
+                           (unsigned int)uids[i],
+                           pcr7 ? "yes" : "no",
+                           keyring ? "yes" : "no");
+                }
+            }
+            if (!is_root) {
+                printf("Note: Run with sudo to list all users on the system.\n");
+            }
+        }
+        exit_code = 0;
+        goto cleanup;
+    }
+
+    if (strcmp(action, "doctor") == 0) {
+        diag_check_t checks[16];
+        size_t nchecks = 0;
+        size_t cap = sizeof(checks) / sizeof(checks[0]);
+
+        tpm_pin_status_t status;
+        tpm_pin_get_user_status(uid, &cfg, &status);
+        bool pam_active = pam_manager_is_enabled();
+
+        /* 1. TPM device presence & accessibility */
+        if (!status.tpm_present) {
+            diag_add(checks, &nchecks, cap, "tpm_device", "TPM 2.0 Device", "fail",
+                     "No TPM 2.0 device detected on this system.");
+        } else if (status.tpm_accessible) {
+            diag_add(checks, &nchecks, cap, "tpm_device", "TPM 2.0 Device", "pass",
+                     "%s detected and accessible (%s).",
+                     status.manufacturer[0] ? status.manufacturer : "TPM 2.0",
+                     status.hardware_type[0] ? status.hardware_type : "Standard TPM 2.0");
+        } else if (geteuid() != 0) {
+            diag_add(checks, &nchecks, cap, "tpm_device", "TPM 2.0 Device", "pass",
+                     "TPM 2.0 detected (%s); /dev/tpmrm0 is root-protected as expected.",
+                     status.hardware_type[0] ? status.hardware_type : "Standard TPM 2.0");
+        } else {
+            diag_add(checks, &nchecks, cap, "tpm_device", "TPM 2.0 Device", "fail",
+                     "TPM 2.0 present in sysfs but failed to initialize TCTI.");
+        }
+
+        /* 2. TPM Dictionary Attack lockout */
+        if (status.tpm_present && status.tpm_accessible) {
+            if (status.is_locked_out) {
+                diag_add(checks, &nchecks, cap, "tpm_da_lockout", "TPM DA Lockout State", "fail",
+                         "TPM is LOCKED OUT (%u/%u failed attempts). Run 'sudo tpm-pin-ctl da-reset'.",
+                         status.failed_tries, status.max_tries);
+            } else if (status.failed_tries > 0) {
+                diag_add(checks, &nchecks, cap, "tpm_da_lockout", "TPM DA Lockout State", "warn",
+                         "%u of %u failed hardware attempts recorded.",
+                         status.failed_tries, status.max_tries);
+            } else {
+                diag_add(checks, &nchecks, cap, "tpm_da_lockout", "TPM DA Lockout State", "pass",
+                         "Ready (0/%u failed attempts, policy max: %u).",
+                         status.max_tries, cfg.da_max_tries);
+            }
+        } else if (status.tpm_present) {
+            diag_add(checks, &nchecks, cap, "tpm_da_lockout", "TPM DA Lockout State", "info",
+                     "Run diagnostics as administrator to query live hardware DA counters.");
+        } else {
+            diag_add(checks, &nchecks, cap, "tpm_da_lockout", "TPM DA Lockout State", "warn",
+                     "Skipped (no TPM device accessible).");
+        }
+
+        /* 3. Setuid verification helper */
+        const char *verify_candidates[] = {
+#ifdef TPM_PIN_VERIFY_PATH
+            TPM_PIN_VERIFY_PATH,
+#endif
+            "/usr/libexec/tpm-pin-verify",
+            "/usr/lib/tpm-pin/tpm-pin-verify",
+            "/usr/lib/x86_64-linux-gnu/tpm-pin/tpm-pin-verify",
+            "/usr/lib64/tpm-pin-verify",
+            "/usr/local/libexec/tpm-pin-verify",
+            "/usr/local/lib/tpm-pin/tpm-pin-verify",
+            NULL
+        };
+        const char *found_helper = NULL;
+        struct stat helper_st;
+        bool helper_found = false;
+        bool helper_safe = false;
+        for (size_t i = 0; verify_candidates[i]; i++) {
+            bool exists = false;
+            if (file_mode_ok_executable_root(verify_candidates[i], true, &helper_st, &exists)) {
+                found_helper = verify_candidates[i];
+                helper_found = true;
+                helper_safe = true;
+                break;
+            } else if (exists && !found_helper) {
+                found_helper = verify_candidates[i];
+                helper_found = true;
+            }
+        }
+        if (helper_safe) {
+            diag_add(checks, &nchecks, cap, "tpm_verify_helper", "Lockscreen Setuid Helper", "pass",
+                     "%s installed with mode 0%o (root-owned, setuid).",
+                     found_helper, (unsigned int)(helper_st.st_mode & 07777));
+        } else if (helper_found) {
+            diag_add(checks, &nchecks, cap, "tpm_verify_helper", "Lockscreen Setuid Helper", "fail",
+                     "%s has unsafe ownership or missing setuid bit (mode 0%o, uid %u).",
+                     found_helper, (unsigned int)(helper_st.st_mode & 07777), (unsigned int)helper_st.st_uid);
+        } else {
+            diag_add(checks, &nchecks, cap, "tpm_verify_helper", "Lockscreen Setuid Helper", "warn",
+                     "Installed tpm-pin-verify helper not found in standard system paths.");
+        }
+
+        /* 4. PAM module binary */
+        const char *pam_candidates[] = {
+            "/usr/lib64/security/pam_tpm_pin.so",
+            "/usr/lib/security/pam_tpm_pin.so",
+            "/usr/lib/x86_64-linux-gnu/security/pam_tpm_pin.so",
+            "/usr/lib/aarch64-linux-gnu/security/pam_tpm_pin.so",
+            "/lib64/security/pam_tpm_pin.so",
+            "/lib/security/pam_tpm_pin.so",
+            "/lib/x86_64-linux-gnu/security/pam_tpm_pin.so",
+            NULL
+        };
+        const char *found_pam = NULL;
+        struct stat pam_st;
+        bool pam_found = false;
+        bool pam_safe = false;
+        for (size_t i = 0; pam_candidates[i]; i++) {
+            bool exists = false;
+            if (file_mode_ok_executable_root(pam_candidates[i], false, &pam_st, &exists)) {
+                found_pam = pam_candidates[i];
+                pam_found = true;
+                pam_safe = true;
+                break;
+            } else if (exists && !found_pam) {
+                found_pam = pam_candidates[i];
+                pam_found = true;
+            }
+        }
+        if (pam_safe) {
+            diag_add(checks, &nchecks, cap, "pam_module", "PAM Module Binary", "pass",
+                     "%s present (root-owned, mode 0%o).",
+                     found_pam, (unsigned int)(pam_st.st_mode & 0777));
+        } else if (pam_found) {
+            diag_add(checks, &nchecks, cap, "pam_module", "PAM Module Binary", "fail",
+                     "%s has unsafe ownership or permissions (mode 0%o, uid %u).",
+                     found_pam, (unsigned int)(pam_st.st_mode & 0777), (unsigned int)pam_st.st_uid);
+        } else if (pam_active) {
+            diag_add(checks, &nchecks, cap, "pam_module", "PAM Module Binary", "fail",
+                     "PAM integration is active but pam_tpm_pin.so was not found in system security directories.");
+        } else {
+            diag_add(checks, &nchecks, cap, "pam_module", "PAM Module Binary", "warn",
+                     "pam_tpm_pin.so not found in system PAM security directories.");
+        }
+
+        /* 5. PAM integration status */
+        if (pam_active) {
+            diag_add(checks, &nchecks, cap, "pam_integration", "System PAM Integration", "pass",
+                     "Enabled for %s.", pam_manager_distro_name(pam_manager_detect_distro()));
+        } else if (status.is_enrolled) {
+            diag_add(checks, &nchecks, cap, "pam_integration", "System PAM Integration", "warn",
+                     "PIN is enrolled, but PAM integration is disabled. Run 'sudo tpm-pin-ctl pam enable'.");
+        } else {
+            diag_add(checks, &nchecks, cap, "pam_integration", "System PAM Integration", "info",
+                     "Disabled (%s).", pam_manager_distro_name(pam_manager_detect_distro()));
+        }
+
+        /* 6. Polkit systemd drop-in */
+        if (!cfg.enable_polkit) {
+            diag_add(checks, &nchecks, cap, "polkit_dropin", "Polkit TPM Sandbox Drop-in", "info",
+                     "Polkit PIN authentication is disabled in configuration.");
+        } else {
+            const char *mask_path = "/etc/systemd/system/polkit-agent-helper@.service.d/50-tpm-pin.conf";
+            const char *etc_dropin = "/etc/systemd/system/polkit-agent-helper@.service.d/tpm-pin.conf";
+            const char *usr_dropin = "/usr/lib/systemd/system/polkit-agent-helper@.service.d/50-tpm-pin.conf";
+            const char *lib_dropin = "/lib/systemd/system/polkit-agent-helper@.service.d/50-tpm-pin.conf";
+            struct stat mst;
+            bool masked = false;
+            if (lstat(mask_path, &mst) == 0 && S_ISLNK(mst.st_mode)) {
+                char link_target[256];
+                ssize_t r = readlink(mask_path, link_target, sizeof(link_target) - 1);
+                if (r > 0) {
+                    link_target[r] = '\0';
+                    if (strcmp(link_target, "/dev/null") == 0) {
+                        masked = true;
+                    }
+                }
+            }
+            if (masked) {
+                diag_add(checks, &nchecks, cap, "polkit_dropin", "Polkit TPM Sandbox Drop-in",
+                         pam_active ? "warn" : "info",
+                         pam_active
+                         ? "Drop-in is masked by /dev/null while PAM is active; run 'sudo tpm-pin-ctl pam enable'."
+                         : "Drop-in is masked while PAM integration is disabled.");
+            } else if (access(etc_dropin, R_OK) == 0) {
+                diag_add(checks, &nchecks, cap, "polkit_dropin", "Polkit TPM Sandbox Drop-in", "pass",
+                         "Active override present at %s.", etc_dropin);
+            } else if (access(usr_dropin, R_OK) == 0 || access(lib_dropin, R_OK) == 0) {
+                diag_add(checks, &nchecks, cap, "polkit_dropin", "Polkit TPM Sandbox Drop-in", "pass",
+                         "Packaged systemd drop-in active for polkit-agent-helper@.");
+            } else {
+                diag_add(checks, &nchecks, cap, "polkit_dropin", "Polkit TPM Sandbox Drop-in", "warn",
+                         "Polkit systemd drop-in not found; graphical pkexec PIN prompts may be blocked.");
+            }
+        }
+
+        /* 7. Sealed data directory security */
+        struct stat dst;
+        if (lstat(cfg.data_dir, &dst) != 0) {
+            diag_add(checks, &nchecks, cap, "data_dir_perms", "Credential Storage Directory", "info",
+                     "%s does not exist yet (created automatically on first PIN enrollment).", cfg.data_dir);
+        } else if (!S_ISDIR(dst.st_mode)) {
+            diag_add(checks, &nchecks, cap, "data_dir_perms", "Credential Storage Directory", "fail",
+                     "%s is not a real directory (possible symlink or irregular file).", cfg.data_dir);
+        } else if ((strcmp(cfg.data_dir, TPM_PIN_DEFAULT_DATA_DIR) == 0 && dst.st_uid != 0) ||
+                   (dst.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+            diag_add(checks, &nchecks, cap, "data_dir_perms", "Credential Storage Directory", "fail",
+                     "%s has unsafe ownership or permissions (uid %u, mode 0%o).",
+                     cfg.data_dir, (unsigned int)dst.st_uid, (unsigned int)(dst.st_mode & 0777));
+        } else {
+            diag_add(checks, &nchecks, cap, "data_dir_perms", "Credential Storage Directory", "pass",
+                     "%s exists with secure permissions (mode 0%o).",
+                     cfg.data_dir, (unsigned int)(dst.st_mode & 0777));
+        }
+
+        /* 8. Enrollment & Config sync */
+        if (!status.is_enrolled) {
+            diag_add(checks, &nchecks, cap, "enrollment_sync", "PIN Enrollment & Config Sync", "info",
+                     "User '%s' (UID %u) has no PIN enrolled.",
+                     username ? username : "unknown", (unsigned int)uid);
+        } else if (cfg.bind_pcr7 != status.pcr7_bound) {
+            diag_add(checks, &nchecks, cap, "enrollment_sync", "PIN Enrollment & Config Sync", "warn",
+                     "Config bind_pcr7=%s differs from sealed blob (%s). Run 'change-pin' to re-seal.",
+                     cfg.bind_pcr7 ? "true" : "false",
+                     status.pcr7_bound ? "bound" : "unbound");
+        } else if (cfg.enable_keyring_unlock && !status.keyring_pwd_saved) {
+            diag_add(checks, &nchecks, cap, "enrollment_sync", "PIN Enrollment & Config Sync", "warn",
+                     "Keyring auto-unlock is enabled, but no login password is sealed. Re-enroll PIN.");
+        } else {
+            diag_add(checks, &nchecks, cap, "enrollment_sync", "PIN Enrollment & Config Sync", "pass",
+                     "User '%s' PIN sealed and in sync (PCR7=%s, Keyring=%s).",
+                     username ? username : "unknown",
+                     status.pcr7_bound ? "bound" : "off",
+                     status.keyring_pwd_saved ? "saved" : "none");
+        }
+
+        /* 9. Keyring PAM module availability */
+        if (!cfg.enable_keyring_unlock) {
+            diag_add(checks, &nchecks, cap, "keyring_pam", "Desktop Keyring PAM Modules", "info",
+                     "Keyring auto-unlock is disabled in configuration.");
+        } else {
+            const char *gkr_paths[] = {
+                "/usr/lib64/security/pam_gnome_keyring.so",
+                "/usr/lib/security/pam_gnome_keyring.so",
+                "/usr/lib/x86_64-linux-gnu/security/pam_gnome_keyring.so",
+                "/usr/lib/aarch64-linux-gnu/security/pam_gnome_keyring.so",
+                NULL
+            };
+            const char *kw_paths[] = {
+                "/usr/lib64/security/pam_kwallet5.so",
+                "/usr/lib/security/pam_kwallet5.so",
+                "/usr/lib/x86_64-linux-gnu/security/pam_kwallet5.so",
+                "/usr/lib/aarch64-linux-gnu/security/pam_kwallet5.so",
+                NULL
+            };
+            bool has_gkr = false, has_kw = false;
+            for (size_t i = 0; gkr_paths[i]; i++) {
+                if (access(gkr_paths[i], F_OK) == 0) { has_gkr = true; break; }
+            }
+            for (size_t i = 0; kw_paths[i]; i++) {
+                if (access(kw_paths[i], F_OK) == 0) { has_kw = true; break; }
+            }
+            if (has_gkr || has_kw) {
+                diag_add(checks, &nchecks, cap, "keyring_pam", "Desktop Keyring PAM Modules", "pass",
+                         "Detected: %s%s%s.",
+                         has_gkr ? "pam_gnome_keyring.so" : "",
+                         (has_gkr && has_kw) ? ", " : "",
+                         has_kw ? "pam_kwallet5.so" : "");
+            } else {
+                diag_add(checks, &nchecks, cap, "keyring_pam", "Desktop Keyring PAM Modules", "info",
+                         "Neither pam_gnome_keyring.so nor pam_kwallet5.so detected (optional).");
+            }
+        }
+
+        /* 10. Legacy udev rule absence */
+        if (lstat("/etc/udev/rules.d/70-tpm-pin.rules", &dst) == 0) {
+            diag_add(checks, &nchecks, cap, "legacy_udev", "TPM Device Permission Hardening", "warn",
+                     "Deprecated /etc/udev/rules.d/70-tpm-pin.rules exists; run 'sudo tpm-pin-ctl pam enable' to remove.");
+        } else {
+            diag_add(checks, &nchecks, cap, "legacy_udev", "TPM Device Permission Hardening", "pass",
+                     "No insecure unprivileged /dev/tpmrm* udev overrides present.");
+        }
+
+        size_t pass_cnt = 0, warn_cnt = 0, fail_cnt = 0;
+        for (size_t i = 0; i < nchecks; i++) {
+            if (strcmp(checks[i].status, "pass") == 0) pass_cnt++;
+            else if (strcmp(checks[i].status, "warn") == 0) warn_cnt++;
+            else if (strcmp(checks[i].status, "fail") == 0) fail_cnt++;
+        }
+
+        if (json_output) {
+            printf("{\n");
+            printf("  \"version\": ");
+            print_json_escaped(TPM_PIN_APP_VERSION);
+            printf(",\n");
+            printf("  \"user\": ");
+            print_json_escaped(username ? username : "unknown");
+            printf(",\n");
+            printf("  \"uid\": %u,\n", (unsigned int)uid);
+            printf("  \"ok\": %s,\n", (fail_cnt == 0) ? "true" : "false");
+            printf("  \"pass\": %zu,\n", pass_cnt);
+            printf("  \"warn\": %zu,\n", warn_cnt);
+            printf("  \"fail\": %zu,\n", fail_cnt);
+            printf("  \"checks\": [\n");
+            for (size_t i = 0; i < nchecks; i++) {
+                printf("    {\n");
+                printf("      \"id\": ");
+                print_json_escaped(checks[i].id);
+                printf(",\n");
+                printf("      \"title\": ");
+                print_json_escaped(checks[i].title);
+                printf(",\n");
+                printf("      \"status\": ");
+                print_json_escaped(checks[i].status);
+                printf(",\n");
+                printf("      \"detail\": ");
+                print_json_escaped(checks[i].detail);
+                printf("\n");
+                printf("    }%s\n", (i + 1 < nchecks) ? "," : "");
+            }
+            printf("  ]\n");
+            printf("}\n");
+        } else {
+            printf("=== Secure PIN for Linux v%s Diagnostics ===\n", TPM_PIN_APP_VERSION);
+            for (size_t i = 0; i < nchecks; i++) {
+                const char *tag = "[INFO]";
+                if (strcmp(checks[i].status, "pass") == 0) tag = "[PASS]";
+                else if (strcmp(checks[i].status, "warn") == 0) tag = "[WARN]";
+                else if (strcmp(checks[i].status, "fail") == 0) tag = "[FAIL]";
+                printf("%-7s %-30s %s\n", tag, checks[i].title, checks[i].detail);
+            }
+            printf("\nSummary: %zu passed, %zu warnings, %zu failures.\n", pass_cnt, warn_cnt, fail_cnt);
+        }
+
+        exit_code = (fail_cnt == 0) ? 0 : 1;
         goto cleanup;
     }
 
@@ -641,25 +1217,78 @@ int main(int argc, char **argv) {
     }
 
     if (strcmp(action, "config") == 0) {
-        if (argc < 4) {
-            printf("Usage: %s config get <key> | config set <key> <value>\n", argv[0]);
+        if (argc < 3) {
+            printf("Usage: %s config list [--json] | config get <key> | config set <key> <value>\n", argv[0]);
             goto cleanup;
         }
         const char *sub = argv[2];
+
+        if (strcmp(sub, "list") == 0) {
+            if (json_output) {
+                printf("{\n");
+                printf("  \"digits_only\": %s,\n", cfg.digits_only ? "true" : "false");
+                printf("  \"min_length\": %u,\n", cfg.min_length);
+                printf("  \"max_length\": %u,\n", cfg.max_length);
+                printf("  \"disallow_simple_pins\": %s,\n", cfg.disallow_simple_pins ? "true" : "false");
+                printf("  \"enable_login\": %s,\n", cfg.enable_login ? "true" : "false");
+                printf("  \"enable_lockscreen\": %s,\n", cfg.enable_lockscreen ? "true" : "false");
+                printf("  \"enable_sudo\": %s,\n", cfg.enable_sudo ? "true" : "false");
+                printf("  \"enable_polkit\": %s,\n", cfg.enable_polkit ? "true" : "false");
+                printf("  \"enable_keyring_unlock\": %s,\n", cfg.enable_keyring_unlock ? "true" : "false");
+                printf("  \"bind_pcr7\": %s,\n", cfg.bind_pcr7 ? "true" : "false");
+                printf("  \"da_max_tries\": %u,\n", cfg.da_max_tries);
+                printf("  \"da_recovery_time\": %u,\n", cfg.da_recovery_time);
+                printf("  \"da_lockout_recovery\": %u,\n", cfg.da_lockout_recovery);
+                printf("  \"tcti_name\": ");
+                print_json_escaped(cfg.tcti_name);
+                printf(",\n");
+                printf("  \"data_dir\": ");
+                print_json_escaped(cfg.data_dir);
+                printf("\n");
+                printf("}\n");
+            } else {
+                printf("digits_only = %s\n", cfg.digits_only ? "true" : "false");
+                printf("min_length = %u\n", cfg.min_length);
+                printf("max_length = %u\n", cfg.max_length);
+                printf("disallow_simple_pins = %s\n", cfg.disallow_simple_pins ? "true" : "false");
+                printf("enable_login = %s\n", cfg.enable_login ? "true" : "false");
+                printf("enable_lockscreen = %s\n", cfg.enable_lockscreen ? "true" : "false");
+                printf("enable_sudo = %s\n", cfg.enable_sudo ? "true" : "false");
+                printf("enable_polkit = %s\n", cfg.enable_polkit ? "true" : "false");
+                printf("enable_keyring_unlock = %s\n", cfg.enable_keyring_unlock ? "true" : "false");
+                printf("bind_pcr7 = %s\n", cfg.bind_pcr7 ? "true" : "false");
+                printf("da_max_tries = %u\n", cfg.da_max_tries);
+                printf("da_recovery_time = %u\n", cfg.da_recovery_time);
+                printf("da_lockout_recovery = %u\n", cfg.da_lockout_recovery);
+                printf("tcti_name = %s\n", cfg.tcti_name[0] ? cfg.tcti_name : "(auto)");
+                printf("data_dir = %s\n", cfg.data_dir);
+            }
+            exit_code = 0;
+            goto cleanup;
+        }
+
+        if (argc < 4) {
+            printf("Usage: %s config list [--json] | config get <key> | config set <key> <value>\n", argv[0]);
+            goto cleanup;
+        }
         const char *key = argv[3];
 
         if (strcmp(sub, "get") == 0) {
             if (strcasecmp(key, "digits_only") == 0) printf("%s\n", cfg.digits_only ? "true" : "false");
             else if (strcasecmp(key, "min_length") == 0) printf("%u\n", cfg.min_length);
             else if (strcasecmp(key, "max_length") == 0) printf("%u\n", cfg.max_length);
+            else if (strcasecmp(key, "disallow_simple_pins") == 0) printf("%s\n", cfg.disallow_simple_pins ? "true" : "false");
             else if (strcasecmp(key, "enable_login") == 0) printf("%s\n", cfg.enable_login ? "true" : "false");
             else if (strcasecmp(key, "enable_lockscreen") == 0) printf("%s\n", cfg.enable_lockscreen ? "true" : "false");
             else if (strcasecmp(key, "enable_sudo") == 0) printf("%s\n", cfg.enable_sudo ? "true" : "false");
+            else if (strcasecmp(key, "enable_polkit") == 0) printf("%s\n", cfg.enable_polkit ? "true" : "false");
             else if (strcasecmp(key, "enable_keyring_unlock") == 0) printf("%s\n", cfg.enable_keyring_unlock ? "true" : "false");
             else if (strcasecmp(key, "bind_pcr7") == 0) printf("%s\n", cfg.bind_pcr7 ? "true" : "false");
             else if (strcasecmp(key, "da_max_tries") == 0) printf("%u\n", cfg.da_max_tries);
             else if (strcasecmp(key, "da_recovery_time") == 0) printf("%u\n", cfg.da_recovery_time);
             else if (strcasecmp(key, "da_lockout_recovery") == 0) printf("%u\n", cfg.da_lockout_recovery);
+            else if (strcasecmp(key, "tcti_name") == 0) printf("%s\n", cfg.tcti_name);
+            else if (strcasecmp(key, "data_dir") == 0) printf("%s\n", cfg.data_dir);
             else {
                 fprintf(stderr, "Error: Unknown config key '%s'\n", key);
                 goto cleanup;
@@ -696,6 +1325,12 @@ int main(int argc, char **argv) {
                 }
                 cfg.max_length = uval;
                 if (cfg.min_length > cfg.max_length) cfg.min_length = cfg.max_length;
+            } else if (strcasecmp(key, "disallow_simple_pins") == 0) {
+                if (!parse_bool_strict(val, &bval)) {
+                    fprintf(stderr, "Error: disallow_simple_pins requires a boolean value (true/false).\n");
+                    goto cleanup;
+                }
+                cfg.disallow_simple_pins = bval;
             } else if (strcasecmp(key, "enable_login") == 0) {
                 if (!parse_bool_strict(val, &bval)) {
                     fprintf(stderr, "Error: enable_login requires a boolean value (true/false).\n");
@@ -714,6 +1349,12 @@ int main(int argc, char **argv) {
                     goto cleanup;
                 }
                 cfg.enable_sudo = bval;
+            } else if (strcasecmp(key, "enable_polkit") == 0) {
+                if (!parse_bool_strict(val, &bval)) {
+                    fprintf(stderr, "Error: enable_polkit requires a boolean value (true/false).\n");
+                    goto cleanup;
+                }
+                cfg.enable_polkit = bval;
             } else if (strcasecmp(key, "enable_keyring_unlock") == 0) {
                 if (!parse_bool_strict(val, &bval)) {
                     fprintf(stderr, "Error: enable_keyring_unlock requires a boolean value (true/false).\n");

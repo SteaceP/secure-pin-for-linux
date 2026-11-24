@@ -1,0 +1,70 @@
+.TH PAM_TPM_PIN 8 "November 2026" "tpm-pin 1.0.9" "System Administration"
+.SH NAME
+pam_tpm_pin \- PAM authentication module for TPM 2.0 PIN login
+.SH SYNOPSIS
+.B pam_tpm_pin.so
+.SH DESCRIPTION
+.B pam_tpm_pin
+is a Pluggable Authentication Module (PAM) that enables Windows Hello\-style
+hardware-backed PIN authentication backed by a TPM 2.0 security processor.
+.PP
+It displays a unified prompt (\fB"PIN or Password: "\fP) when invoked for an
+allowed local PAM service and an enrolled user. Input that matches the
+configured PIN policy format is verified against the TPM 2.0 using AES-128-CFB
+parameter transit encryption. Standard system passwords that do not match the
+PIN format bypass the TPM completely and pass straight through to downstream
+modules such as
+.BR pam_unix (8)
+(\fBtry_first_pass\fP) without consuming hardware Dictionary Attack attempts.
+.PP
+When a PIN succeeds and a login password was sealed at enrollment time,
+.B pam_tpm_pin
+sets \fBPAM_AUTHTOK\fP and the GNOME Keyring \fBgkr_system_authtok\fP data
+item so desktop keyrings unlock automatically.
+.SH SECURITY MODEL
+.IP \(bu 2
+Remote, network, and autologin PAM services (such as \fBsshd\fP,
+\fBdropbear\fP, \fBtelnet\fP, \fBrlogin\fP, \fBcrond\fP, \fBcockpit\fP,
+\fBxrdp\fP, \fBvnc\fP, and non-local \fBPAM_RHOST\fP connections) are
+explicitly rejected and always return \fBPAM_IGNORE\fP.
+.IP \(bu 2
+Direct TPM device access (\fI/dev/tpmrm0\fP) remains restricted to \fBroot\fP.
+Unprivileged screen lockers authenticate through the setuid-root
+\fBtpm-pin-verify\fP helper, which never exposes unsealed keyring passwords to
+unprivileged processes.
+.IP \(bu 2
+Scope flags (\fBenable_login\fP, \fBenable_lockscreen\fP, \fBenable_sudo\fP,
+\fBenable_polkit\fP) restrict which local PAM services accept TPM PINs.
+.IP \(bu 2
+Credential blobs bind metadata header fields and target UID into AES-256-GCM
+associated authenticated data (AAD).
+.SH MODULE TYPES PROVIDED
+Only the \fBauth\fP module type is active (\fBpam_sm_authenticate\fP and
+\fBpam_sm_setcred\fP). Account, session, and password hooks return
+\fBPAM_IGNORE\fP.
+.SH RETURN VALUES
+.TP
+.B PAM_SUCCESS
+The user's PIN was verified by the TPM 2.0 hardware.
+.TP
+.B PAM_IGNORE
+The service is disallowed, remote, disabled by configuration, or the user has
+no enrolled PIN.
+.TP
+.B PAM_AUTHINFO_UNAVAIL
+PIN verification failed or input did not match the PIN format; PAM falls back
+to standard password authentication.
+.TP
+.B PAM_USER_UNKNOWN
+Target username could not be resolved.
+.SH FILES
+.TP
+.I /etc/tpm-pin/config.conf
+System policy and scope configuration file.
+.TP
+.I /var/lib/tpm-pin/<uid>/sealed.blob
+Root-only TPM-sealed credential blob.
+.SH SEE ALSO
+.BR tpm-pin-ctl (1),
+.BR pam (8),
+.BR pam.conf (5)

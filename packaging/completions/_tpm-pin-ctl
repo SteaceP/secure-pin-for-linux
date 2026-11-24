@@ -1,0 +1,101 @@
+#compdef tpm-pin-ctl
+
+_tpm_pin_ctl() {
+    local -a commands config_keys pam_actions config_actions
+    commands=(
+        'status:Show TPM, PIN, PAM, and policy status'
+        'enroll:Enroll or re-enroll a TPM-backed PIN'
+        'change-pin:Change an enrolled PIN while keeping keyring unlock password'
+        'verify:Verify an enrolled PIN against the TPM'
+        'remove:Remove an enrolled user PIN'
+        'list:List enrolled users'
+        'doctor:Run diagnostics across TPM, PAM, Polkit, and permissions'
+        'pam:Enable, disable, or inspect system PAM integration'
+        'da-reset:Reset TPM Dictionary Attack lockout counter'
+        'da-config:Configure TPM Dictionary Attack protection thresholds'
+        'config:Inspect or update configuration settings'
+        'version:Show version information'
+    )
+
+    config_keys=(
+        digits_only
+        min_length
+        max_length
+        disallow_simple_pins
+        enable_login
+        enable_lockscreen
+        enable_sudo
+        enable_polkit
+        enable_keyring_unlock
+        bind_pcr7
+        da_max_tries
+        da_recovery_time
+        da_lockout_recovery
+        tcti_name
+        data_dir
+    )
+
+    if (( CURRENT == 2 )); then
+        _describe -t commands 'tpm-pin-ctl command' commands
+        compadd -- --version -V --help -h
+        return
+    fi
+
+    case "$words[2]" in
+        status|doctor)
+            _arguments '--json[Output JSON]' '--user[Target username]:username:_users'
+            ;;
+        enroll|change-pin)
+            _arguments '--user[Target username]:username:_users' '--pin[PIN value]:pin:' '--password[Login password]:password:'
+            ;;
+        verify)
+            _arguments '--user[Target username]:username:_users' '--pin[PIN value]:pin:'
+            ;;
+        remove)
+            _arguments '--user[Target username]:username:_users'
+            ;;
+        list)
+            _arguments '--json[Output JSON]'
+            ;;
+        pam)
+            if (( CURRENT == 3 )); then
+                pam_actions=(
+                    'enable:Enable PAM integration'
+                    'disable:Disable PAM integration'
+                    'status:Show PAM integration status'
+                )
+                _describe -t pam-actions 'pam action' pam_actions
+            elif [[ "$words[3]" == "disable" ]]; then
+                _arguments '--uninstall[Remove package-level masks during uninstall]'
+            fi
+            ;;
+        da-config)
+            _arguments \
+                '--max-tries[Maximum failed attempts]:tries:' \
+                '--recovery-sec[Cooldown recovery seconds]:seconds:' \
+                '--lockout-recovery[Lockout recovery seconds]:seconds:'
+            ;;
+        config)
+            if (( CURRENT == 3 )); then
+                config_actions=(
+                    'list:List all configuration settings'
+                    'get:Get a configuration setting'
+                    'set:Set a configuration setting'
+                )
+                _describe -t config-actions 'config action' config_actions
+            elif [[ "$words[3]" == "list" ]]; then
+                _arguments '--json[Output JSON]'
+            elif (( CURRENT == 4 )) && [[ "$words[3]" == "get" || "$words[3]" == "set" ]]; then
+                compadd -a config_keys
+            elif (( CURRENT == 5 && "$words[3]" == "set" )); then
+                case "$words[4]" in
+                    digits_only|disallow_simple_pins|enable_login|enable_lockscreen|enable_sudo|enable_polkit|enable_keyring_unlock|bind_pcr7)
+                        compadd true false
+                        ;;
+                esac
+            fi
+            ;;
+    esac
+}
+
+_tpm_pin_ctl "$@"

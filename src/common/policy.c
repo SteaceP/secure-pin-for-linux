@@ -57,6 +57,41 @@ bool tpm_pin_validate_pin(const char *pin, const tpm_pin_config_t *cfg, char *er
         return false;
     }
 
+    if ((!cfg || cfg->disallow_simple_pins) && len >= 4) {
+        /* Reject strictly sequential ascending or descending patterns (e.g. "1234", "4321", "abcd") */
+        bool seq_asc = true;
+        bool seq_desc = true;
+        for (size_t i = 1; i < len; i++) {
+            int diff = (int)(unsigned char)pin[i] - (int)(unsigned char)pin[i - 1];
+            if (diff != 1) seq_asc = false;
+            if (diff != -1) seq_desc = false;
+        }
+        if (seq_asc || seq_desc) {
+            if (err_buf && err_size > 0)
+                snprintf(err_buf, err_size, "PIN cannot be a simple sequential pattern (e.g. 1234 or 4321).");
+            return false;
+        }
+
+        /* Reject simple repeating or alternating patterns (e.g. "1212", "123123", "12121") */
+        for (size_t period = 2; period <= len / 2; period++) {
+            if (len % period != 0 && period != 2) {
+                continue;
+            }
+            bool repeating = true;
+            for (size_t i = period; i < len; i++) {
+                if (pin[i] != pin[i % period]) {
+                    repeating = false;
+                    break;
+                }
+            }
+            if (repeating) {
+                if (err_buf && err_size > 0)
+                    snprintf(err_buf, err_size, "PIN cannot be a simple repeating pattern (e.g. 1212 or 123123).");
+                return false;
+            }
+        }
+    }
+
     return true;
 }
 
@@ -128,19 +163,24 @@ bool tpm_pin_is_service_enabled(const char *service, bool unprivileged_caller, c
         return false;
     }
 
-    /* Privilege elevation (CLI and graphical Polkit) requires root caller & enable_sudo */
+    /* Terminal privilege elevation requires root caller & enable_sudo */
     if (strcmp(service, "sudo") == 0 ||
         strcmp(service, "sudo-i") == 0 ||
         strcmp(service, "su") == 0 ||
         strcmp(service, "su-l") == 0 ||
-        strcmp(service, "doas") == 0 ||
-        strcmp(service, "polkit") == 0 ||
+        strcmp(service, "doas") == 0) {
+        if (unprivileged_caller) return false;
+        return cfg->enable_sudo;
+    }
+
+    /* Graphical Polkit elevation requires root caller & enable_polkit */
+    if (strcmp(service, "polkit") == 0 ||
         strcmp(service, "polkit-1") == 0 ||
         strcmp(service, "policykit") == 0 ||
         strcmp(service, "pkexec") == 0 ||
         strncmp(service, "polkit-", 7) == 0) {
         if (unprivileged_caller) return false;
-        return cfg->enable_sudo;
+        return cfg->enable_polkit;
     }
 
     if (strcmp(service, "gdm-password") == 0) {

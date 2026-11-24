@@ -23,6 +23,9 @@ extern "C" {
 #define TPM_PIN_DEFAULT_DATA_DIR    "/var/lib/tpm-pin"
 #define TPM_PIN_MAGIC               0x54504D50  /* "TPMP" */
 #define TPM_PIN_VERSION             2
+#ifndef TPM_PIN_APP_VERSION
+#define TPM_PIN_APP_VERSION         "1.0.9"
+#endif
 
 #define TPM_PIN_SALT_LEN            32
 #define TPM_PIN_IV_LEN              12
@@ -39,9 +42,11 @@ typedef struct {
     bool     digits_only;
     uint32_t min_length;
     uint32_t max_length;
+    bool     disallow_simple_pins;
     bool     enable_login;
     bool     enable_lockscreen;
     bool     enable_sudo;
+    bool     enable_polkit;
     bool     enable_keyring_unlock;
     bool     bind_pcr7;
     uint32_t da_max_tries;
@@ -137,12 +142,22 @@ TSS2_RC tpm_engine_reset_da_lockout(ESYS_CONTEXT *ctx);
 
 /* High-level User Actions */
 bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const tpm_pin_config_t *cfg);
+bool tpm_pin_change_pin(uid_t uid, const char *old_pin, const char *new_pin,
+                        const char *override_password, const tpm_pin_config_t *cfg,
+                        int *tpm_status_code);
 bool tpm_pin_verify_user(uid_t uid, const char *pin, const tpm_pin_config_t *cfg,
                          char *unsealed_password, size_t pwd_buf_size,
                          int *tpm_status_code);
 bool tpm_pin_remove_user(uid_t uid, const tpm_pin_config_t *cfg);
 bool tpm_pin_user_is_enrolled(uid_t uid, const tpm_pin_config_t *cfg);
+bool tpm_pin_get_user_enrollment_flags(uid_t uid, const tpm_pin_config_t *cfg,
+                                       bool *pcr7_bound, bool *keyring_pwd_saved);
+size_t tpm_pin_list_enrolled_users(const tpm_pin_config_t *cfg, uid_t *uids_out, size_t max_uids);
 bool tpm_pin_get_user_status(uid_t uid, const tpm_pin_config_t *cfg, tpm_pin_status_t *status);
+
+/* Local System Password Verification (used by CLI enrollment, not PAM module) */
+int  tpm_pin_verify_shadow_hash(const char *password, const char *shadow_hash);
+int  tpm_pin_verify_system_password(const char *username, const char *password);
 
 /* TPM Return Code Helpers */
 static inline bool tpm_pin_rc_is_lockout(uint32_t rc) {

@@ -1,5 +1,5 @@
 Name:           tpm-pin
-Version:        1.0.8
+Version:        1.0.9
 Release:        1%{?dist}
 Summary:        Windows Hello-style TPM 2.0 PIN authentication for Linux
 
@@ -77,10 +77,23 @@ fi
 %{_datadir}/polkit-1/actions/io.github.securepin.policy
 %{_prefix}/lib/systemd/system/polkit-agent-helper@.service.d/50-tpm-pin.conf
 %{_prefix}/lib/tmpfiles.d/tpm-pin.conf
+%{_mandir}/man1/tpm-pin-ctl.1*
+%{_mandir}/man8/pam_tpm_pin.8*
+%{_datadir}/bash-completion/completions/tpm-pin-ctl
+%{_datadir}/zsh/site-functions/_tpm-pin-ctl
+%{_datadir}/fish/vendor_completions.d/tpm-pin-ctl.fish
+%{_datadir}/gnome-shell/extensions/secure-pin@coderage.pro/
 %dir %attr(0755,root,root) %{_sharedstatedir}/tpm-pin
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 
 %changelog
+* Tue Nov 24 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.9-1
+- Add PIN rotation (change-pin), enrolled user listing (list), config listing, --version, and doctor diagnostics
+- Verify local login passwords against shadow hashes before sealing for keyring auto-unlock
+- Separate Polkit scope (enable_polkit) from sudo and reject simple sequential/repeating PINs
+- Upgrade GTK4/Libadwaita Settings app with Test PIN, Change PIN, DA policy controls, actionable banners, Diagnostics tab, and About dialog
+- Add live status polling in GNOME Shell Quick Settings extension, man pages, and bash/zsh/fish completions
+
 * Mon Nov 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.8-1
 - Remove unprivileged udev uaccess rule on /dev/tpmrm* and require root for DA reset/config
 - Fix GUI PIN enrollment stdin protocol regression and make GUI CLI execution asynchronous

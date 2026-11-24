@@ -2,8 +2,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#include <limits.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <tss2/tss2_mu.h>
@@ -653,6 +656,194 @@ bool tpm_pin_verify_user(uid_t uid, const char *pin, const tpm_pin_config_t *cfg
     return true;
 }
 
+static int cmp_uid_asc(const void *a, const void *b) {
+    uid_t ua = *(const uid_t *)a;
+    uid_t ub = *(const uid_t *)b;
+    return (ua < ub) ? -1 : ((ua > ub) ? 1 : 0);
+}
+
+static bool parse_uid_dir_name(const char *name, uid_t *uid_out) {
+    if (!name || !name[0] || !uid_out) return false;
+    for (size_t i = 0; name[i] != '\0'; i++) {
+        if (!isdigit((unsigned char)name[i])) return false;
+    }
+    errno = 0;
+    char *endptr = NULL;
+    unsigned long val = strtoul(name, &endptr, 10);
+    if (errno == ERANGE || !endptr || *endptr != '\0' || val > (unsigned long)UINT32_MAX) {
+        return false;
+    }
+    *uid_out = (uid_t)val;
+    return true;
+}
+
+bool tpm_pin_get_user_enrollment_flags(uid_t uid, const tpm_pin_config_t *cfg,
+                                       bool *pcr7_bound, bool *keyring_pwd_saved) {
+    if (pcr7_bound) *pcr7_bound = false;
+    if (keyring_pwd_saved) *keyring_pwd_saved = false;
+
+    tpm_pin_config_t local_cfg;
+    if (!cfg) {
+        tpm_pin_config_load(NULL, &local_cfg);
+        cfg = &local_cfg;
+    }
+
+    if (!tpm_pin_user_is_enrolled(uid, cfg)) {
+        return false;
+    }
+
+    bool sys_dir = is_system_data_dir(cfg);
+    char blob_path[512];
+    get_user_blob_path(uid, cfg, blob_path, sizeof(blob_path));
+    FILE *f = open_regular_file_ro(blob_path, sys_dir);
+    if (f) {
+        tpm_sealed_header_t hdr;
+        if (fread(&hdr, sizeof(hdr), 1, f) == 1 &&
+            hdr.magic == TPM_PIN_MAGIC &&
+            hdr.version == TPM_PIN_VERSION) {
+            if (pcr7_bound) *pcr7_bound = (hdr.flags & FLAG_PCR7_BOUND) != 0;
+            if (keyring_pwd_saved) *keyring_pwd_saved = (hdr.flags & FLAG_KEYRING_PWD_STORED) != 0;
+        }
+        fclose(f);
+        return true;
+    }
+
+    char meta_path[512];
+    get_user_meta_path(uid, cfg, meta_path, sizeof(meta_path));
+    uint32_t meta_flags = 0;
+    if (read_meta_flags(meta_path, sys_dir, &meta_flags)) {
+        if (pcr7_bound) *pcr7_bound = (meta_flags & FLAG_PCR7_BOUND) != 0;
+        if (keyring_pwd_saved) *keyring_pwd_saved = (meta_flags & FLAG_KEYRING_PWD_STORED) != 0;
+    }
+    return true;
+}
+
+size_t tpm_pin_list_enrolled_users(const tpm_pin_config_t *cfg, uid_t *uids_out, size_t max_uids) {
+    tpm_pin_config_t local_cfg;
+    if (!cfg) {
+        tpm_pin_config_load(NULL, &local_cfg);
+        cfg = &local_cfg;
+    }
+
+    const char *base_dir = get_safe_base_dir(cfg);
+    bool sys_dir = is_system_data_dir(cfg);
+
+    int dfd = open(base_dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (dfd < 0) return 0;
+
+    struct stat st;
+    if (fstat(dfd, &st) != 0 || !S_ISDIR(st.st_mode) ||
+        (st.st_mode & (S_IWGRP | S_IWOTH)) != 0 ||
+        (sys_dir && st.st_uid != 0)) {
+        close(dfd);
+        return 0;
+    }
+
+    DIR *dir = fdopendir(dfd);
+    if (!dir) {
+        close(dfd);
+        return 0;
+    }
+
+    size_t cap = 64;
+    size_t total = 0;
+    uid_t *found = (uid_t *)malloc(cap * sizeof(uid_t));
+    if (!found) {
+        closedir(dir);
+        return 0;
+    }
+
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        uid_t uid = 0;
+        if (!parse_uid_dir_name(ent->d_name, &uid)) {
+            continue;
+        }
+        if (!tpm_pin_user_is_enrolled(uid, cfg)) {
+            continue;
+        }
+        if (total == cap) {
+            if (cap >= 65536) break;
+            size_t new_cap = cap * 2;
+            uid_t *tmp = (uid_t *)realloc(found, new_cap * sizeof(uid_t));
+            if (!tmp) break;
+            found = tmp;
+            cap = new_cap;
+        }
+        found[total++] = uid;
+    }
+
+    closedir(dir);
+
+    if (total > 1) {
+        qsort(found, total, sizeof(uid_t), cmp_uid_asc);
+    }
+
+    if (!uids_out || max_uids == 0) {
+        free(found);
+        return total;
+    }
+
+    size_t written = (total < max_uids) ? total : max_uids;
+    memcpy(uids_out, found, written * sizeof(uid_t));
+    free(found);
+    return written;
+}
+
+bool tpm_pin_change_pin(uid_t uid, const char *old_pin, const char *new_pin,
+                        const char *override_password, const tpm_pin_config_t *cfg,
+                        int *tpm_status_code) {
+    if (tpm_status_code) *tpm_status_code = 0;
+    if (!old_pin || old_pin[0] == '\0' || !new_pin) return false;
+
+    size_t old_len = strlen(old_pin);
+    if (old_len > TPM_PIN_MAX_PIN_LEN) return false;
+    for (size_t i = 0; i < old_len; i++) {
+        if (iscntrl((unsigned char)old_pin[i])) return false;
+    }
+
+    tpm_pin_config_t local_cfg;
+    if (!cfg) {
+        tpm_pin_config_load(NULL, &local_cfg);
+        cfg = &local_cfg;
+    }
+
+    char err_buf[256];
+    if (!tpm_pin_validate_pin(new_pin, cfg, err_buf, sizeof(err_buf))) {
+        return false;
+    }
+
+    /*
+     * Allow verifying old_pin even if policy constraints (min_length, max_length, digits_only)
+     * were tightened after enrollment, while still validating new_pin against the active policy.
+     */
+    tpm_pin_config_t verify_cfg = *cfg;
+    verify_cfg.digits_only = false;
+    verify_cfg.min_length = 1;
+    verify_cfg.max_length = TPM_PIN_MAX_PIN_LEN;
+
+    char unsealed_pwd[TPM_PIN_MAX_PASSWORD_LEN] = {0};
+    int tpm_rc = 0;
+    if (!tpm_pin_verify_user(uid, old_pin, &verify_cfg, unsealed_pwd, sizeof(unsealed_pwd), &tpm_rc)) {
+        if (tpm_status_code) *tpm_status_code = tpm_rc;
+        tpm_pin_zero(unsealed_pwd, sizeof(unsealed_pwd));
+        return false;
+    }
+
+    const char *pwd_to_seal = NULL;
+    if (cfg->enable_keyring_unlock) {
+        if (override_password && override_password[0] != '\0') {
+            pwd_to_seal = override_password;
+        } else if (unsealed_pwd[0] != '\0') {
+            pwd_to_seal = unsealed_pwd;
+        }
+    }
+
+    bool ok = tpm_pin_enroll_user(uid, new_pin, pwd_to_seal, cfg);
+    tpm_pin_zero(unsealed_pwd, sizeof(unsealed_pwd));
+    return ok;
+}
+
 bool tpm_pin_get_user_status(uid_t uid, const tpm_pin_config_t *cfg, tpm_pin_status_t *status) {
     if (!status) return false;
     memset(status, 0, sizeof(*status));
@@ -663,32 +854,8 @@ bool tpm_pin_get_user_status(uid_t uid, const tpm_pin_config_t *cfg, tpm_pin_sta
         cfg = &local_cfg;
     }
 
-    bool sys_dir = is_system_data_dir(cfg);
-    status->is_enrolled = tpm_pin_user_is_enrolled(uid, cfg);
-
-    if (status->is_enrolled) {
-        char blob_path[512];
-        get_user_blob_path(uid, cfg, blob_path, sizeof(blob_path));
-        FILE *f = open_regular_file_ro(blob_path, sys_dir);
-        if (f) {
-            tpm_sealed_header_t hdr;
-            if (fread(&hdr, sizeof(hdr), 1, f) == 1 &&
-                hdr.magic == TPM_PIN_MAGIC &&
-                hdr.version == TPM_PIN_VERSION) {
-                status->pcr7_bound = (hdr.flags & FLAG_PCR7_BOUND) != 0;
-                status->keyring_pwd_saved = (hdr.flags & FLAG_KEYRING_PWD_STORED) != 0;
-            }
-            fclose(f);
-        } else {
-            char meta_path[512];
-            get_user_meta_path(uid, cfg, meta_path, sizeof(meta_path));
-            uint32_t meta_flags = 0;
-            if (read_meta_flags(meta_path, sys_dir, &meta_flags)) {
-                status->pcr7_bound = (meta_flags & FLAG_PCR7_BOUND) != 0;
-                status->keyring_pwd_saved = (meta_flags & FLAG_KEYRING_PWD_STORED) != 0;
-            }
-        }
-    }
+    status->is_enrolled = tpm_pin_get_user_enrollment_flags(
+        uid, cfg, &status->pcr7_bound, &status->keyring_pwd_saved);
 
     ESYS_CONTEXT *esys = NULL;
     TSS2_RC rc = tpm_engine_init(cfg->tcti_name, &esys);

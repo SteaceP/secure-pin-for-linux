@@ -164,7 +164,7 @@ if [ "$DO_PACKAGE" = true ]; then
         fi
     else
         VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt 2>/dev/null)
-        [ -z "$VERSION" ] && VERSION="1.0.8"
+        [ -z "$VERSION" ] && VERSION="1.0.9"
         echo "Building universal tarball (.tar.gz)..."
         tar --exclude='.git' \
             --exclude='./build*' \
@@ -183,7 +183,7 @@ if [ "$DO_PACKAGE" = true ]; then
 
     if [ "$BUILD_ARCH" = true ] || { [ "$HOST_IS_ARCH" = true ] && command -v makepkg >/dev/null 2>&1; }; then
         VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-        [ -z "$VERSION" ] && VERSION="1.0.8"
+        [ -z "$VERSION" ] && VERSION="1.0.9"
         if command -v makepkg >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
             echo "Building Arch Linux package natively via makepkg..."
             (
@@ -236,7 +236,7 @@ if [ "$DO_PACKAGE" = true ]; then
         if command -v flatpak-builder >/dev/null 2>&1; then
             echo "Building Flatpak package via flatpak-builder..."
             VERSION=$(sed -n 's/.*project(tpm-pin VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-            [ -z "$VERSION" ] && VERSION="1.0.8"
+            [ -z "$VERSION" ] && VERSION="1.0.9"
             mkdir -p "$ROOT_DIR/build-flatpak" "$ROOT_DIR/flatpak-repo"
             flatpak-builder --force-clean --repo="$ROOT_DIR/flatpak-repo" "$ROOT_DIR/build-flatpak" packaging/flatpak/io.github.securepin.Settings.yml
             flatpak build-bundle "$ROOT_DIR/flatpak-repo" "$DIST_DIR/io.github.securepin.Settings-${VERSION}.flatpak" io.github.securepin.Settings

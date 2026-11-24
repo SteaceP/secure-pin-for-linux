@@ -24,7 +24,16 @@ fi
 echo ""
 echo "=== Checking Python GTK4 / Libadwaita Settings App ==="
 python3 -m py_compile gui/tpm-pin-settings
+./gui/tpm-pin-settings --version
 echo "Python syntax check: PASSED"
+
+echo ""
+echo "=== Checking Shell Completions & GNOME Extension Syntax ==="
+bash -n packaging/completions/tpm-pin-ctl.bash
+if command -v node >/dev/null 2>&1; then
+    node --check gui/gnome-extension/extension.js
+fi
+echo "Completion & extension checks: PASSED"
 
 echo ""
 echo "=== Running Automated Tests ==="
@@ -62,10 +71,14 @@ trap cleanup EXIT
 ./build/test_pam_harness
 
 echo ""
-echo "=== CLI Status Smoke Test ==="
+echo "=== CLI Smoke Tests ==="
+./build/tpm-pin-ctl --version
 ./build/tpm-pin-ctl status || true
 echo ""
-./build/tpm-pin-ctl status --json || true
+./build/tpm-pin-ctl status --json | python3 -m json.tool
+./build/tpm-pin-ctl config list --json | python3 -m json.tool
+./build/tpm-pin-ctl list --json | python3 -m json.tool
+(./build/tpm-pin-ctl doctor --json || true) | python3 -m json.tool
 
 echo ""
 echo "=== All Tests Completed Successfully! ==="

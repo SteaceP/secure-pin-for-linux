@@ -21,15 +21,15 @@ It integrates with **PAM** (login screen, lock screen, `sudo`, and Polkit), auto
   - Intelligent fallback: typing your standard system password does not waste TPM DA attempts and seamlessly authenticates via standard PAM (`pam_unix.so try_first_pass`) without asking twice.
   - **Desktop Keyring Auto-Unlock**: Sealing your login password in the TPM enables automatic GNOME Keyring / COSMIC / KWallet unlocking on boot login.
 - **Native GTK4 / Libadwaita Settings App**:
-  - Matches the GNOME Settings look and feel (`AdwPreferencesWindow`).
-  - Configure PIN enrollment, change/remove PIN, per-service toggles (`sudo`, login screen, lock screen, keyring auto-unlock), PIN complexity policies (digits-only vs. alphanumeric, min/max length), and reset TPM lockout counters.
-  - Registers under `Settings;System;Security;` in application launchers.
+  - Matches the GNOME Settings look and feel (`AdwApplicationWindow` with `ViewStack`, actionable status banners, and About dialog).
+  - Configure PIN enrollment, PIN rotation (`Change PIN`), in-app PIN verification (`Test PIN`), remove PIN, per-service toggles (`sudo`, Polkit, login screen, lock screen, keyring auto-unlock), PIN complexity policies (digits-only vs. alphanumeric, sequential/repeating PIN blocking, min/max length), hardware DA lockout thresholds/cooldowns, and an integrated **Diagnostics** tab.
+  - Registers under `Settings;System;Security;` in application launchers and includes a live-status **GNOME Shell Quick Settings** extension (`secure-pin@coderage.pro`).
 - **Cross-Distribution & Packaging Support**:
   - Debian / Ubuntu (`.deb`, `pam-auth-update` profile).
   - Fedora / RHEL / CentOS (`.rpm`, `system-auth` / `password-auth`).
   - Arch Linux (`PKGBUILD` with `x86_64`, `x86_64_v3`, `x86_64_v4`, and `aarch64` targets).
   - Flatpak bundle (`io.github.securepin.Settings`) for sandboxed desktop environments.
-  - Universal CMake build system.
+  - Ships man pages (`tpm-pin-ctl(1)`, `pam_tpm_pin(8)`) and shell completions (`bash`, `zsh`, `fish`) via CMake and `Makefile`.
 
 ---
 
@@ -113,10 +113,15 @@ Or JSON format (used by the settings GUI):
 
 You will be prompted for your current login password (to seal for desktop keyring auto-unlock) and your new PIN.
 
-### 3. Verify PIN against TPM 2.0
+### 3. Verify, Change PIN, List Users, and Run Diagnostics
 
 ```bash
 ./build/tpm-pin-ctl verify
+sudo ./build/tpm-pin-ctl change-pin
+sudo ./build/tpm-pin-ctl list --json
+./build/tpm-pin-ctl doctor
+./build/tpm-pin-ctl config list
+./build/tpm-pin-ctl --version
 ```
 
 ### 4. Launch the GUI Settings Application

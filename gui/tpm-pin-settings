@@ -16,19 +16,89 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Adw, Gio, GLib
+from gi.repository import Gtk, Adw, Gdk, Gio, GLib, GObject
 
 APP_ID = "io.github.securepin.Settings"
+APP_VERSION = "1.0.9"
 
 
 def _has_control_chars(value):
     return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
 
 
+def _is_sequential_pin(pin):
+    raw = pin if isinstance(pin, (bytes, bytearray)) else pin.encode("utf-8")
+    if len(raw) < 4:
+        return False
+    diffs = [raw[i] - raw[i - 1] for i in range(1, len(raw))]
+    return all(d == 1 for d in diffs) or all(d == -1 for d in diffs)
+
+
+def _is_repeating_pin(pin):
+    raw = pin if isinstance(pin, (bytes, bytearray)) else pin.encode("utf-8")
+    n = len(raw)
+    if n < 4:
+        return False
+    for period in range(2, (n // 2) + 1):
+        if n % period != 0 and period != 2:
+            continue
+        if all(raw[i] == raw[i % period] for i in range(period, n)):
+            return True
+    return False
+
+
+def _validate_pin_client(pin, state):
+    if not pin:
+        return "PIN cannot be empty."
+    if _has_control_chars(pin):
+        return "PIN cannot contain newline or control characters."
+
+    min_len = int(state.get("min_length", 4))
+    max_len = int(state.get("max_length", 32))
+    digits_only = bool(state.get("digits_only", True))
+    disallow_simple = bool(state.get("disallow_simple_pins", True))
+    raw_bytes = pin.encode("utf-8")
+    pin_byte_len = len(raw_bytes)
+
+    if pin_byte_len < min_len:
+        return f"PIN is too short (minimum {min_len} bytes required)."
+    if pin_byte_len > max_len:
+        return f"PIN is too long (maximum {max_len} bytes allowed)."
+    if digits_only and not (pin.isascii() and pin.isdigit()):
+        return "PIN must contain ASCII numbers only (0-9)."
+    if pin_byte_len >= 4 and len(set(raw_bytes)) == 1:
+        return "PIN cannot consist of all identical characters."
+    if disallow_simple:
+        if _is_sequential_pin(raw_bytes):
+            return "PIN cannot be a simple sequential pattern (e.g. 1234 or 4321)."
+        if _is_repeating_pin(raw_bytes):
+            return "PIN cannot be a simple repeating pattern (e.g. 1212 or 123123)."
+    return None
+
+
+def _format_duration(seconds):
+    secs = int(seconds)
+    if secs >= 86400 and secs % 86400 == 0:
+        days = secs // 86400
+        return f"{days} {'day' if days == 1 else 'days'} ({secs} s)"
+    if secs >= 3600 and secs % 3600 == 0:
+        hrs = secs // 3600
+        return f"{hrs} {'hour' if hrs == 1 else 'hours'} ({secs} s)"
+    if secs >= 60 and secs % 60 == 0:
+        mins = secs // 60
+        return f"{mins} {'min' if mins == 1 else 'mins'} ({secs} s)"
+    return f"{secs} s"
+
+
 class TpmPinSettingsApp(Adw.Application):
     def __init__(self):
         app_flags = getattr(Gio.ApplicationFlags, "DEFAULT_FLAGS", Gio.ApplicationFlags.FLAGS_NONE)
         super().__init__(application_id=APP_ID, flags=app_flags)
+
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        self.set_accels_for_action("win.refresh", ["<Control>r", "F5"])
+        self.set_accels_for_action("win.diagnostics", ["<Control>d"])
 
     def do_activate(self):
         win = self.props.active_window
@@ -37,19 +107,38 @@ class TpmPinSettingsApp(Adw.Application):
         win.present()
 
 
-class TpmPinMainWindow(Adw.PreferencesWindow):
+class TpmPinMainWindow(Adw.ApplicationWindow):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.set_title("Secure PIN Settings")
-        self.set_icon_name("io.github.securepin.Settings")
-        self.set_default_size(720, 680)
+        self.set_icon_name(APP_ID)
+        self.set_default_size(740, 720)
 
         self._updating_ui = False
+        self._banner_action = None
+        self._diag_rows = []
+        self._diag_loaded_once = False
+        self._last_diag_report = ""
+
         self.ctl_path = self._find_ctl()
         self.state = self.load_status()
 
+        self._setup_actions()
         self._build_ui()
         self._apply_state(self.state)
+
+    def _setup_actions(self):
+        act_refresh = Gio.SimpleAction.new("refresh", None)
+        act_refresh.connect("activate", lambda *_: self.on_refresh_clicked())
+        self.add_action(act_refresh)
+
+        act_diag = Gio.SimpleAction.new("diagnostics", None)
+        act_diag.connect("activate", lambda *_: self.open_diagnostics_tab(force_run=True))
+        self.add_action(act_diag)
+
+        act_about = Gio.SimpleAction.new("about", None)
+        act_about.connect("activate", lambda *_: self.on_about_clicked())
+        self.add_action(act_about)
 
     def _is_flatpak(self):
         return os.path.exists("/.flatpak-info") or bool(os.environ.get("FLATPAK_ID"))
@@ -76,10 +165,10 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
                     return c
         return "/usr/bin/tpm-pin-ctl"
 
-    def run_ctl(self, args, need_root=False, input_text=None):
+    def run_ctl_raw(self, args, need_root=False, input_text=None):
         ctl = self.ctl_path
         if need_root and not self._is_flatpak() and not os.path.isfile(ctl):
-            return False, f"System binary not found: {ctl}"
+            return -1, "", f"System binary not found: {ctl}"
         if self._is_flatpak():
             cmd = ["flatpak-spawn", "--host"]
             if need_root:
@@ -91,14 +180,24 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
             if need_root and os.geteuid() != 0:
                 cmd = ["pkexec"] + cmd
         try:
-            res = subprocess.run(cmd, input=input_text, capture_output=True, text=True, check=True, timeout=120)
-            return True, res.stdout.strip()
+            res = subprocess.run(cmd, input=input_text, capture_output=True, text=True, timeout=120)
+            return res.returncode, res.stdout.strip(), res.stderr.strip()
         except subprocess.TimeoutExpired:
-            return False, "Command timed out."
-        except subprocess.CalledProcessError as e:
-            return False, e.stderr.strip() or e.stdout.strip()
+            return -1, "", "Command timed out."
         except Exception as e:
-            return False, str(e)
+            return -1, "", str(e)
+
+    def run_ctl(self, args, need_root=False, input_text=None):
+        rc, out, err = self.run_ctl_raw(args, need_root=need_root, input_text=input_text)
+        if rc == 0:
+            return True, out
+        return False, err or out
+
+    def run_ctl_raw_async(self, args, callback, need_root=False, input_text=None):
+        def worker():
+            rc, out, err = self.run_ctl_raw(args, need_root=need_root, input_text=input_text)
+            GLib.idle_add(callback, rc, out, err)
+        threading.Thread(target=worker, daemon=True).start()
 
     def run_ctl_async(self, args, callback, need_root=False, input_text=None):
         def worker():
@@ -128,6 +227,8 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
                     host_installed = False
 
             return {
+                "version": APP_VERSION,
+                "user": "unknown",
                 "tpm_present": False,
                 "tpm_accessible": False,
                 "tpm_manufacturer": "Host service missing" if not host_installed else "TPM 2.0 (Not detected)",
@@ -140,22 +241,79 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
                 "digits_only": True,
                 "min_length": 4,
                 "max_length": 32,
+                "disallow_simple_pins": True,
                 "da_max_tries": 5,
                 "da_recovery_time": 600,
+                "da_lockout_recovery": 86400,
                 "bind_pcr7": False,
                 "enable_login": True,
                 "enable_lockscreen": True,
                 "enable_sudo": True,
+                "enable_polkit": True,
                 "enable_keyring_unlock": True,
             }
 
+    def add_toast(self, toast):
+        self.toast_overlay.add_toast(toast)
+
     def _build_ui(self):
-        # Page 1: General & PIN
+        self.toast_overlay = Adw.ToastOverlay()
+        self.set_content(self.toast_overlay)
+
+        toolbar_view = Adw.ToolbarView()
+        self.toast_overlay.set_child(toolbar_view)
+
+        self.view_stack = Adw.ViewStack()
+        self.view_stack.connect("notify::visible-child-name", self._on_tab_changed)
+
+        # Header Bar
+        header = Adw.HeaderBar()
+        self.btn_refresh = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
+        self.btn_refresh.set_tooltip_text("Refresh Status (Ctrl+R)")
+        self.btn_refresh.connect("clicked", lambda *_: self.on_refresh_clicked())
+        header.pack_start(self.btn_refresh)
+
+        switcher_title = Adw.ViewSwitcherTitle()
+        switcher_title.set_stack(self.view_stack)
+        switcher_title.set_title("Secure PIN Settings")
+        header.set_title_widget(switcher_title)
+
+        menu = Gio.Menu()
+        menu.append("Run Diagnostics", "win.diagnostics")
+        menu.append("About Secure PIN Settings", "win.about")
+        menu_btn = Gtk.MenuButton()
+        menu_btn.set_icon_name("open-menu-symbolic")
+        menu_btn.set_menu_model(menu)
+        menu_btn.set_tooltip_text("Main Menu")
+        header.pack_end(menu_btn)
+
+        toolbar_view.add_top_bar(header)
+
+        # Actionable Status Banner
+        self.banner = Adw.Banner()
+        if hasattr(self.banner, "set_use_markup"):
+            self.banner.set_use_markup(False)
+        self.banner.connect("button-clicked", self.on_banner_action_clicked)
+        toolbar_view.add_top_bar(self.banner)
+
+        toolbar_view.set_content(self.view_stack)
+
+        # Bottom ViewSwitcherBar for narrow widths
+        switcher_bar = Adw.ViewSwitcherBar()
+        switcher_bar.set_stack(self.view_stack)
+        switcher_title.bind_property(
+            "title-visible",
+            switcher_bar,
+            "reveal",
+            GObject.BindingFlags.SYNC_CREATE,
+        )
+        toolbar_view.add_bottom_bar(switcher_bar)
+
+        # Page 1: PIN & Sign-in
         page1 = Adw.PreferencesPage()
         page1.set_title("PIN & Sign-in")
         page1.set_icon_name("dialog-password-symbolic")
 
-        # Group: Hardware & Enrollment Status
         grp_status = Adw.PreferencesGroup()
         grp_status.set_title("Authentication Status")
 
@@ -186,6 +344,11 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
         self.row_enroll.set_subtitle("Not enrolled")
         self.row_enroll.add_prefix(Gtk.Image.new_from_icon_name("avatar-default-symbolic"))
 
+        self.btn_test = Gtk.Button(label="Test PIN")
+        self.btn_test.set_valign(Gtk.Align.CENTER)
+        self.btn_test.connect("clicked", self.on_test_pin_clicked)
+        self.row_enroll.add_suffix(self.btn_test)
+
         self.btn_enroll = Gtk.Button(label="Set Up PIN")
         self.btn_enroll.add_css_class("suggested-action")
         self.btn_enroll.set_valign(Gtk.Align.CENTER)
@@ -201,7 +364,6 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
         grp_status.add(self.row_enroll)
         page1.add(grp_status)
 
-        # Group: Where to use PIN
         grp_scopes = Adw.PreferencesGroup()
         grp_scopes.set_title("Authentication Scope")
         grp_scopes.set_description("Select where the TPM PIN can be used to authenticate.")
@@ -222,10 +384,17 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
 
         self.sw_sudo = Adw.SwitchRow()
         self.sw_sudo.set_use_markup(False)
-        self.sw_sudo.set_title("Sudo & Polkit Admin Prompts")
-        self.sw_sudo.set_subtitle("Authorize sudo / doas commands and graphical Polkit admin prompts")
+        self.sw_sudo.set_title("Sudo & Terminal Elevation")
+        self.sw_sudo.set_subtitle("Authorize sudo, doas, and su commands in terminals")
         self.sw_sudo.connect("notify::active", lambda s, p: self.on_config_toggle(s, "enable_sudo"))
         grp_scopes.add(self.sw_sudo)
+
+        self.sw_polkit = Adw.SwitchRow()
+        self.sw_polkit.set_use_markup(False)
+        self.sw_polkit.set_title("Polkit Graphical Prompts")
+        self.sw_polkit.set_subtitle("Authorize pkexec and graphical desktop administrator prompts")
+        self.sw_polkit.connect("notify::active", lambda s, p: self.on_config_toggle(s, "enable_polkit"))
+        grp_scopes.add(self.sw_polkit)
 
         self.sw_keyring = Adw.SwitchRow()
         self.sw_keyring.set_use_markup(False)
@@ -236,7 +405,6 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
 
         page1.add(grp_scopes)
 
-        # Group: System PAM Integration
         grp_pam = Adw.PreferencesGroup()
         grp_pam.set_title("System PAM Integration")
         grp_pam.set_description("Enable or disable the PAM module in system authentication files.")
@@ -249,14 +417,13 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
         grp_pam.add(self.sw_pam)
 
         page1.add(grp_pam)
-        self.add(page1)
+        self.view_stack.add_titled_with_icon(page1, "pin", "PIN & Sign-in", "dialog-password-symbolic")
 
-        # Page 2: Security & Hardware
+        # Page 2: Security & TPM
         page2 = Adw.PreferencesPage()
         page2.set_title("Security & TPM")
         page2.set_icon_name("system-lock-screen-symbolic")
 
-        # Group: PIN Policy
         grp_policy = Adw.PreferencesGroup()
         grp_policy.set_title("PIN Complexity Policy")
 
@@ -266,6 +433,13 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
         self.sw_digits.set_subtitle("Restrict PIN to numeric characters (0-9)")
         self.sw_digits.connect("notify::active", lambda s, p: self.on_config_toggle(s, "digits_only"))
         grp_policy.add(self.sw_digits)
+
+        self.sw_simple = Adw.SwitchRow()
+        self.sw_simple.set_use_markup(False)
+        self.sw_simple.set_title("Block Simple PINs")
+        self.sw_simple.set_subtitle("Reject sequential (1234, 4321) and repeating (1212, 123123) patterns")
+        self.sw_simple.connect("notify::active", lambda s, p: self.on_config_toggle(s, "disallow_simple_pins"))
+        grp_policy.add(self.sw_simple)
 
         self.spin_min = Adw.SpinRow.new_with_range(4, 64, 1)
         self.spin_min.set_title("Minimum PIN Length")
@@ -279,7 +453,6 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
 
         page2.add(grp_policy)
 
-        # Group: Hardware TPM Controls
         grp_tpm = Adw.PreferencesGroup()
         grp_tpm.set_title("Hardware Anti-Hammering & Boot Protection")
 
@@ -293,15 +466,177 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
         self.row_da = Adw.ActionRow()
         self.row_da.set_use_markup(False)
         self.row_da.set_title("Dictionary Attack Lockout")
-        self.row_da.set_subtitle(f"{self.state.get('da_max_tries', 5)} max failed attempts before hardware rate-limit")
+        self.row_da.set_subtitle("Checking hardware lockout status...")
         self.btn_reset_da = Gtk.Button(label="Reset Lockout")
         self.btn_reset_da.set_valign(Gtk.Align.CENTER)
         self.btn_reset_da.connect("clicked", self.on_reset_da_clicked)
         self.row_da.add_suffix(self.btn_reset_da)
         grp_tpm.add(self.row_da)
 
+        self.spin_da_tries = Adw.SpinRow.new_with_range(1, 1000, 1)
+        self.spin_da_tries.set_use_markup(False)
+        self.spin_da_tries.set_title("Max Failed Attempts")
+        self.spin_da_tries.set_subtitle("Hardware TPM failures allowed before lockout")
+        self.spin_da_tries.connect("notify::value", self._on_da_spin_changed)
+        grp_tpm.add(self.spin_da_tries)
+
+        self.spin_da_recovery = Adw.SpinRow.new_with_range(1, 2592000, 60)
+        self.spin_da_recovery.set_use_markup(False)
+        self.spin_da_recovery.set_title("Attempt Cooldown (seconds)")
+        self.spin_da_recovery.set_subtitle(_format_duration(600))
+        self.spin_da_recovery.connect("notify::value", self._on_da_spin_changed)
+        grp_tpm.add(self.spin_da_recovery)
+
+        self.spin_da_lockout = Adw.SpinRow.new_with_range(1, 2592000, 3600)
+        self.spin_da_lockout.set_use_markup(False)
+        self.spin_da_lockout.set_title("Lockout Recovery (seconds)")
+        self.spin_da_lockout.set_subtitle(_format_duration(86400))
+        self.spin_da_lockout.connect("notify::value", self._on_da_spin_changed)
+        grp_tpm.add(self.spin_da_lockout)
+
+        self.row_da_apply = Adw.ActionRow()
+        self.row_da_apply.set_use_markup(False)
+        self.row_da_apply.set_title("Apply Hardware DA Policy")
+        self.row_da_apply.set_subtitle("Saves policy and programs TPM Dictionary Attack parameters (requires pkexec)")
+        self.btn_apply_da = Gtk.Button(label="Apply DA Policy")
+        self.btn_apply_da.add_css_class("suggested-action")
+        self.btn_apply_da.set_valign(Gtk.Align.CENTER)
+        self.btn_apply_da.set_sensitive(False)
+        self.btn_apply_da.connect("clicked", self.on_apply_da_clicked)
+        self.row_da_apply.add_suffix(self.btn_apply_da)
+        grp_tpm.add(self.row_da_apply)
+
         page2.add(grp_tpm)
-        self.add(page2)
+        self.view_stack.add_titled_with_icon(page2, "security", "Security & TPM", "system-lock-screen-symbolic")
+
+        # Page 3: Diagnostics
+        page3 = Adw.PreferencesPage()
+        page3.set_title("Diagnostics")
+        page3.set_icon_name("utilities-system-monitor-symbolic")
+
+        grp_diag_ctrl = Adw.PreferencesGroup()
+        grp_diag_ctrl.set_title("System Health Check")
+        grp_diag_ctrl.set_description("Inspect TPM hardware, setuid helper, PAM stack, Polkit drop-ins, and enrollment sync.")
+
+        self.row_diag_summary = Adw.ActionRow()
+        self.row_diag_summary.set_use_markup(False)
+        self.row_diag_summary.set_title("Diagnostics Ready")
+        self.row_diag_summary.set_subtitle("Click Run Diagnostics to inspect your configuration.")
+        self.row_diag_summary.add_prefix(Gtk.Image.new_from_icon_name("utilities-system-monitor-symbolic"))
+
+        self.btn_diag_run = Gtk.Button(label="Run Diagnostics")
+        self.btn_diag_run.add_css_class("suggested-action")
+        self.btn_diag_run.set_valign(Gtk.Align.CENTER)
+        self.btn_diag_run.connect("clicked", lambda *_: self.run_diagnostics(as_root=False))
+        self.row_diag_summary.add_suffix(self.btn_diag_run)
+
+        self.btn_diag_root = Gtk.Button(label="Run as Admin")
+        self.btn_diag_root.set_valign(Gtk.Align.CENTER)
+        self.btn_diag_root.connect("clicked", lambda *_: self.run_diagnostics(as_root=True))
+        self.row_diag_summary.add_suffix(self.btn_diag_root)
+
+        self.btn_diag_copy = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
+        self.btn_diag_copy.set_tooltip_text("Copy Diagnostic Report")
+        self.btn_diag_copy.set_valign(Gtk.Align.CENTER)
+        self.btn_diag_copy.set_sensitive(False)
+        self.btn_diag_copy.connect("clicked", self.on_copy_diag_clicked)
+        self.row_diag_summary.add_suffix(self.btn_diag_copy)
+
+        grp_diag_ctrl.add(self.row_diag_summary)
+        page3.add(grp_diag_ctrl)
+
+        self.grp_diag_results = Adw.PreferencesGroup()
+        self.grp_diag_results.set_title("Check Results")
+        page3.add(self.grp_diag_results)
+
+        self.view_stack.add_titled_with_icon(page3, "diagnostics", "Diagnostics", "utilities-system-monitor-symbolic")
+
+    def _on_tab_changed(self, stack, pspec):
+        if stack.get_visible_child_name() == "diagnostics" and not self._diag_loaded_once:
+            self._diag_loaded_once = True
+            self.run_diagnostics(as_root=False)
+
+    def open_diagnostics_tab(self, force_run=False):
+        self.view_stack.set_visible_child_name("diagnostics")
+        if force_run or not self._diag_loaded_once:
+            self._diag_loaded_once = True
+            self.run_diagnostics(as_root=False)
+
+    def _update_banner(self):
+        host_ok = self.state.get("host_installed", True)
+        tpm_ok = self.state.get("tpm_present", False)
+        enrolled = self.state.get("is_enrolled", False)
+        pam_enabled = self.state.get("pam_enabled", False)
+        locked_out = self.state.get("is_locked_out", False)
+        pcr7_bound = self.state.get("pcr7_bound", False)
+        bind_pcr7 = self.state.get("bind_pcr7", False)
+        keyring_saved = self.state.get("keyring_pwd_saved", False)
+        enable_keyring = self.state.get("enable_keyring_unlock", True)
+
+        self._banner_action = None
+        if not host_ok:
+            self.banner.set_title("Host service (tpm-pin-ctl) is not installed on the host system.")
+            self.banner.set_button_label("")
+            self.banner.set_revealed(True)
+        elif locked_out:
+            self.banner.set_title("TPM Dictionary Attack lockout is active. Reset the lockout counter to re-enable PIN sign-in.")
+            self.banner.set_button_label("Reset Lockout")
+            self._banner_action = "reset_da"
+            self.banner.set_revealed(True)
+        elif enrolled and not pam_enabled:
+            self.banner.set_title("Your PIN is enrolled, but PAM integration is currently disabled.")
+            self.banner.set_button_label("Enable PAM")
+            self._banner_action = "enable_pam"
+            self.banner.set_revealed(True)
+        elif enrolled and (bind_pcr7 != pcr7_bound):
+            self.banner.set_title("PCR 7 policy changed since enrollment. Re-seal your PIN to apply the updated Secure Boot binding.")
+            self.banner.set_button_label("Change PIN")
+            self._banner_action = "change_pin"
+            self.banner.set_revealed(True)
+        elif enrolled and enable_keyring and not keyring_saved:
+            self.banner.set_title("Keyring auto-unlock is enabled, but no login password is sealed yet.")
+            self.banner.set_button_label("Re-enroll PIN")
+            self._banner_action = "reenroll"
+            self.banner.set_revealed(True)
+        elif not tpm_ok:
+            self.banner.set_title("No TPM 2.0 device detected. Hardware-backed PIN enrollment is unavailable.")
+            self.banner.set_button_label("")
+            self.banner.set_revealed(True)
+        else:
+            self.banner.set_button_label("")
+            self.banner.set_revealed(False)
+
+    def on_banner_action_clicked(self, banner):
+        action = self._banner_action
+        if action == "reset_da":
+            self.on_reset_da_clicked(self.btn_reset_da)
+        elif action == "enable_pam":
+            if not self.sw_pam.get_active():
+                self.sw_pam.set_active(True)
+        elif action == "change_pin":
+            ChangePinDialog(self).present()
+        elif action == "reenroll":
+            EnrollPinDialog(self).present()
+
+    def _on_da_spin_changed(self, spin, pspec):
+        if spin is self.spin_da_recovery:
+            self.spin_da_recovery.set_subtitle(_format_duration(spin.get_value()))
+        elif spin is self.spin_da_lockout:
+            self.spin_da_lockout.set_subtitle(_format_duration(spin.get_value()))
+        if not getattr(self, "_updating_ui", False):
+            self._update_da_apply_sensitive()
+
+    def _update_da_apply_sensitive(self):
+        tries = int(self.spin_da_tries.get_value())
+        rec = int(self.spin_da_recovery.get_value())
+        lock = int(self.spin_da_lockout.get_value())
+        changed = (
+            tries != int(self.state.get("da_max_tries", 5)) or
+            rec != int(self.state.get("da_recovery_time", 600)) or
+            lock != int(self.state.get("da_lockout_recovery", 86400))
+        )
+        can_apply = changed and self.state.get("host_installed", True) and self.state.get("tpm_present", False)
+        self.btn_apply_da.set_sensitive(can_apply)
 
     def _apply_state(self, state):
         self._updating_ui = True
@@ -313,7 +648,9 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
             mfg = self.state.get("tpm_manufacturer", "TPM 2.0")
             hw_type = self.state.get("hardware_type", "Standard TPM 2.0")
             bus_enc = self.state.get("bus_encryption", "Active (AES-128-CFB)")
-            if not self.state.get("host_installed", True):
+            host_ok = self.state.get("host_installed", True)
+
+            if not host_ok:
                 self.row_tpm.set_subtitle("Host service not installed (install tpm-pin on host system)")
                 self.row_hw.set_subtitle("Flatpak Sandbox (Host Integration)")
                 self.row_bus.set_subtitle("Host daemon missing")
@@ -337,6 +674,12 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
             distro = self.state.get("distro", "Linux")
             self.sw_pam.set_subtitle(f"Detected system: {distro} — Requires administrative authorization (pkexec)")
 
+            user_name = self.state.get("user", "unknown")
+            if user_name and user_name != "unknown":
+                self.row_enroll.set_title(f"PIN Status ({user_name})")
+            else:
+                self.row_enroll.set_title("PIN Status")
+
             enrolled = self.state.get("is_enrolled", False)
             if enrolled:
                 details = ["PIN configured and hardware-bound"]
@@ -346,10 +689,14 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
                     details.append("Keyring Auto-Unlock")
                 self.row_enroll.set_subtitle(" • ".join(details))
                 self.btn_enroll.set_label("Change PIN")
+                self.btn_test.set_visible(True)
+                self.btn_test.set_sensitive(host_ok and tpm_ok)
                 self.btn_remove.set_visible(True)
+                self.btn_remove.set_sensitive(host_ok)
             else:
                 self.row_enroll.set_subtitle("No PIN configured for this account")
                 self.btn_enroll.set_label("Set Up PIN")
+                self.btn_test.set_visible(False)
                 self.btn_remove.set_visible(False)
 
             locked_out = self.state.get("is_locked_out", False)
@@ -363,31 +710,56 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
             else:
                 self.row_da.set_subtitle(f"{da_cfg_tries} max failed attempts before hardware rate-limit")
 
-            self.sw_login.set_active(self.state.get("enable_login", True))
-            self.sw_lock.set_active(self.state.get("enable_lockscreen", True))
-            self.sw_sudo.set_active(self.state.get("enable_sudo", True))
-            self.sw_keyring.set_active(self.state.get("enable_keyring_unlock", True))
-            self.sw_pam.set_active(self.state.get("pam_enabled", False))
+            self.btn_reset_da.set_sensitive(host_ok and tpm_ok)
 
-            self.sw_digits.set_active(self.state.get("digits_only", True))
-            self.spin_min.set_value(self.state.get("min_length", 4))
-            self.spin_max.set_value(self.state.get("max_length", 32))
-            self.sw_pcr.set_active(self.state.get("bind_pcr7", False))
+            self.sw_login.set_active(bool(self.state.get("enable_login", True)))
+            self.sw_lock.set_active(bool(self.state.get("enable_lockscreen", True)))
+            self.sw_sudo.set_active(bool(self.state.get("enable_sudo", True)))
+            self.sw_polkit.set_active(bool(self.state.get("enable_polkit", self.state.get("enable_sudo", True))))
+            self.sw_keyring.set_active(bool(self.state.get("enable_keyring_unlock", True)))
+            self.sw_pam.set_active(bool(self.state.get("pam_enabled", False)))
+
+            self.sw_digits.set_active(bool(self.state.get("digits_only", True)))
+            self.sw_simple.set_active(bool(self.state.get("disallow_simple_pins", True)))
+            self.spin_min.set_value(int(self.state.get("min_length", 4)))
+            self.spin_max.set_value(int(self.state.get("max_length", 32)))
+            self.sw_pcr.set_active(bool(self.state.get("bind_pcr7", False)))
+
+            da_rec = int(self.state.get("da_recovery_time", 600))
+            da_lock = int(self.state.get("da_lockout_recovery", 86400))
+            self.spin_da_tries.set_value(int(da_cfg_tries))
+            self.spin_da_recovery.set_value(da_rec)
+            self.spin_da_recovery.set_subtitle(_format_duration(da_rec))
+            self.spin_da_lockout.set_value(da_lock)
+            self.spin_da_lockout.set_subtitle(_format_duration(da_lock))
+            self.btn_apply_da.set_sensitive(False)
+
+            self._update_banner()
         finally:
             self._updating_ui = False
 
     def refresh_ui(self):
         self._apply_state(self.load_status())
 
-    def refresh_ui_async(self):
+    def refresh_ui_async(self, show_toast=False):
+        self.btn_refresh.set_sensitive(False)
+
         def worker():
             state = self.load_status()
-            GLib.idle_add(self._on_status_loaded, state)
+            GLib.idle_add(self._on_status_loaded, state, show_toast)
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_status_loaded(self, state):
+    def _on_status_loaded(self, state, show_toast=False):
+        self.btn_refresh.set_sensitive(True)
         self._apply_state(state)
+        if show_toast:
+            self.add_toast(Adw.Toast.new("Status refreshed."))
         return GLib.SOURCE_REMOVE
+
+    def on_refresh_clicked(self):
+        self.refresh_ui_async(show_toast=True)
+        if self.view_stack.get_visible_child_name() == "diagnostics":
+            self.run_diagnostics(as_root=False)
 
     def on_config_toggle(self, switch, key):
         if getattr(self, "_updating_ui", False):
@@ -401,11 +773,12 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
             switch.set_sensitive(True)
             if ok:
                 self.state[key] = value
+                self._update_banner()
                 if self.state.get("is_enrolled", False):
                     if key == "bind_pcr7":
-                        self.add_toast(Adw.Toast.new("Click 'Change PIN' to re-seal your PIN with the updated PCR 7 setting."))
+                        self.add_toast(Adw.Toast.new("Use 'Change PIN' to re-seal your PIN with the updated PCR 7 setting."))
                     elif key == "enable_keyring_unlock" and value and not self.state.get("keyring_pwd_saved", False):
-                        self.add_toast(Adw.Toast.new("Click 'Change PIN' to seal your login password for keyring auto-unlock."))
+                        self.add_toast(Adw.Toast.new("Use 'Re-enroll PIN' to seal your login password for keyring auto-unlock."))
             else:
                 self._updating_ui = True
                 switch.set_active(not value)
@@ -448,6 +821,43 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
 
         self.run_ctl_async(["config", "set", key, str(val)], on_done, need_root=True)
 
+    def on_apply_da_clicked(self, btn):
+        for spin in (self.spin_da_tries, self.spin_da_recovery, self.spin_da_lockout):
+            if hasattr(spin, "update"):
+                spin.update()
+
+        max_tries = int(self.spin_da_tries.get_value())
+        rec_sec = int(self.spin_da_recovery.get_value())
+        lock_sec = int(self.spin_da_lockout.get_value())
+
+        btn.set_sensitive(False)
+        self.spin_da_tries.set_sensitive(False)
+        self.spin_da_recovery.set_sensitive(False)
+        self.spin_da_lockout.set_sensitive(False)
+
+        def on_done(ok, msg):
+            self.spin_da_tries.set_sensitive(True)
+            self.spin_da_recovery.set_sensitive(True)
+            self.spin_da_lockout.set_sensitive(True)
+            if ok:
+                self.refresh_ui_async()
+                self.add_toast(Adw.Toast.new("TPM Dictionary Attack parameters updated."))
+            else:
+                self._update_da_apply_sensitive()
+                self._show_alert("DA Policy Update Failed", msg or "Failed to update TPM DA parameters.")
+            return GLib.SOURCE_REMOVE
+
+        self.run_ctl_async(
+            [
+                "da-config",
+                "--max-tries", str(max_tries),
+                "--recovery-sec", str(rec_sec),
+                "--lockout-recovery", str(lock_sec),
+            ],
+            on_done,
+            need_root=True,
+        )
+
     def on_pam_toggle(self, switch, gparam):
         if getattr(self, "_updating_ui", False):
             return
@@ -466,6 +876,7 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
                 self._show_alert("PAM Configuration Error", msg)
             else:
                 self.refresh_ui_async()
+                self.add_toast(Adw.Toast.new("PAM integration enabled." if active else "PAM integration disabled."))
             return GLib.SOURCE_REMOVE
 
         self.run_ctl_async(["pam", cmd], on_done, need_root=True)
@@ -477,12 +888,21 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
             btn.set_sensitive(True)
             if ok:
                 self.refresh_ui_async()
-                self._show_alert("Success", "TPM Dictionary Attack lockout counter has been reset.")
+                self.add_toast(Adw.Toast.new("TPM Dictionary Attack lockout counter reset."))
             else:
                 self._show_alert("Lockout Reset Failed", msg)
             return GLib.SOURCE_REMOVE
 
         self.run_ctl_async(["da-reset"], on_done, need_root=True)
+
+    def on_test_pin_clicked(self, btn):
+        VerifyPinDialog(self).present()
+
+    def on_setup_pin_clicked(self, btn):
+        if self.state.get("is_enrolled", False):
+            ChangePinDialog(self).present()
+        else:
+            EnrollPinDialog(self).present()
 
     def on_remove_pin_clicked(self, btn):
         dialog = Adw.MessageDialog(
@@ -500,12 +920,16 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
                 cmd = ["remove", "--user", target_user] if target_user and target_user != "unknown" else ["remove"]
                 self.btn_remove.set_sensitive(False)
                 self.btn_enroll.set_sensitive(False)
+                self.btn_test.set_sensitive(False)
 
                 def on_done(ok, msg):
                     self.btn_remove.set_sensitive(True)
                     self.btn_enroll.set_sensitive(True)
+                    self.btn_test.set_sensitive(True)
                     if not ok and msg:
                         self._show_alert("Remove PIN Failed", msg)
+                    elif ok:
+                        self.add_toast(Adw.Toast.new("PIN enrollment removed."))
                     self.refresh_ui_async()
                     return GLib.SOURCE_REMOVE
 
@@ -514,9 +938,126 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
         dialog.connect("response", on_response)
         dialog.present()
 
-    def on_setup_pin_clicked(self, btn):
-        dialog = EnrollPinDialog(self)
-        dialog.present()
+    def _clear_diag_rows(self):
+        for row in self._diag_rows:
+            self.grp_diag_results.remove(row)
+        self._diag_rows.clear()
+
+    def run_diagnostics(self, as_root=False):
+        self.btn_diag_run.set_sensitive(False)
+        self.btn_diag_root.set_sensitive(False)
+        self.row_diag_summary.set_title("Running Diagnostics…")
+        self.row_diag_summary.set_subtitle("Inspecting TPM hardware, PAM integration, and system configuration")
+
+        target_user = self.state.get("user")
+        cmd = ["doctor", "--json"]
+        if target_user and target_user != "unknown":
+            cmd += ["--user", target_user]
+
+        def on_done(rc, out, err):
+            self.btn_diag_run.set_sensitive(True)
+            self.btn_diag_root.set_sensitive(True)
+            self._clear_diag_rows()
+
+            parsed = None
+            if out.startswith("{"):
+                try:
+                    parsed = json.loads(out)
+                except Exception:
+                    parsed = None
+
+            if parsed is None:
+                self.row_diag_summary.set_title("Diagnostics Failed")
+                self.row_diag_summary.set_subtitle(err or out or "Unable to run tpm-pin-ctl doctor.")
+                self.btn_diag_copy.set_sensitive(False)
+                self._last_diag_report = ""
+                return GLib.SOURCE_REMOVE
+
+            passed = parsed.get("pass", 0)
+            warned = parsed.get("warn", 0)
+            failed = parsed.get("fail", 0)
+            checks = parsed.get("checks", [])
+
+            if failed > 0:
+                self.row_diag_summary.set_title(f"{failed} Issue{'s' if failed != 1 else ''} Detected")
+            elif warned > 0:
+                self.row_diag_summary.set_title(f"Healthy with {warned} Warning{'s' if warned != 1 else ''}")
+            else:
+                self.row_diag_summary.set_title("All Systems Healthy")
+            self.row_diag_summary.set_subtitle(f"{passed} passed • {warned} warnings • {failed} failures")
+
+            icon_map = {
+                "pass": ("emblem-ok-symbolic", "success"),
+                "warn": ("dialog-warning-symbolic", "warning"),
+                "fail": ("dialog-error-symbolic", "error"),
+                "info": ("dialog-information-symbolic", "dim-label"),
+            }
+
+            report_lines = [
+                f"Secure PIN for Linux {parsed.get('version', APP_VERSION)} Diagnostics",
+                f"User: {parsed.get('user', 'unknown')} (UID {parsed.get('uid', '')})",
+                f"Summary: {passed} passed, {warned} warnings, {failed} failures",
+                "",
+            ]
+
+            for item in checks:
+                status = item.get("status", "info")
+                title = item.get("title", item.get("id", "Check"))
+                detail = item.get("detail", "")
+                icon_name, css_cls = icon_map.get(status, ("dialog-information-symbolic", "dim-label"))
+
+                row = Adw.ActionRow()
+                row.set_use_markup(False)
+                row.set_title(title)
+                row.set_subtitle(detail)
+                img = Gtk.Image.new_from_icon_name(icon_name)
+                img.add_css_class(css_cls)
+                row.add_prefix(img)
+                self.grp_diag_results.add(row)
+                self._diag_rows.append(row)
+
+                report_lines.append(f"[{status.upper()}] {title}: {detail}")
+
+            self._last_diag_report = "\n".join(report_lines)
+            self.btn_diag_copy.set_sensitive(True)
+            return GLib.SOURCE_REMOVE
+
+        self.run_ctl_raw_async(cmd, on_done, need_root=as_root)
+
+    def on_copy_diag_clicked(self, btn):
+        if not self._last_diag_report:
+            return
+        display = Gdk.Display.get_default()
+        if display:
+            display.get_clipboard().set(self._last_diag_report)
+            self.add_toast(Adw.Toast.new("Diagnostic report copied to clipboard."))
+
+    def on_about_clicked(self):
+        if hasattr(Adw, "AboutDialog"):
+            dlg = Adw.AboutDialog(
+                application_name="Secure PIN Settings",
+                application_icon=APP_ID,
+                version=APP_VERSION,
+                developer_name="Secure PIN Team",
+                license_type=Gtk.License.GPL_3_0,
+                website="https://github.com/steacep/secure-pin-for-linux",
+                issue_url="https://github.com/steacep/secure-pin-for-linux/issues",
+                comments="Hardware-backed Windows Hello–style TPM 2.0 PIN authentication for Linux.",
+            )
+            dlg.present(self)
+        else:
+            win = Adw.AboutWindow(
+                transient_for=self,
+                application_name="Secure PIN Settings",
+                application_icon=APP_ID,
+                version=APP_VERSION,
+                developer_name="Secure PIN Team",
+                license_type=Gtk.License.GPL_3_0,
+                website="https://github.com/steacep/secure-pin-for-linux",
+                issue_url="https://github.com/steacep/secure-pin-for-linux/issues",
+                comments="Hardware-backed Windows Hello–style TPM 2.0 PIN authentication for Linux.",
+            )
+            win.present()
 
     def _show_alert(self, title, msg):
         dialog = Adw.MessageDialog(
@@ -528,25 +1069,35 @@ class TpmPinMainWindow(Adw.PreferencesWindow):
         dialog.present()
 
 
-class EnrollPinDialog(Adw.PreferencesWindow):
+class EnrollPinDialog(Adw.Window):
     def __init__(self, parent_win):
         super().__init__()
         self.set_transient_for(parent_win)
         self.set_modal(True)
-        self.set_title("Set Up PIN")
-        self.set_default_size(480, 420)
+        self.set_title("Re-enroll PIN" if parent_win.state.get("is_enrolled", False) else "Set Up PIN")
+        self.set_default_size(480, 480)
         self.parent_win = parent_win
-        self.need_pwd = self.parent_win.state.get("enable_keyring_unlock", True)
+        self.need_pwd = bool(self.parent_win.state.get("enable_keyring_unlock", True))
         self._busy = False
+        self.connect("close-request", lambda *_: self._busy)
+
+        toolbar = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        toolbar.add_top_bar(header)
 
         page = Adw.PreferencesPage()
         grp = Adw.PreferencesGroup()
         grp.set_title("Enter PIN Details")
+        if self.need_pwd:
+            grp.set_description("Your current login password is verified locally and sealed inside the TPM for keyring auto-unlock.")
 
         self.row_pwd = Adw.PasswordEntryRow()
         self.row_pwd.set_title("Current Login Password")
+        self.row_pwd_confirm = Adw.PasswordEntryRow()
+        self.row_pwd_confirm.set_title("Confirm Login Password")
         if self.need_pwd:
             grp.add(self.row_pwd)
+            grp.add(self.row_pwd_confirm)
 
         self.row_pin = Adw.PasswordEntryRow()
         self.row_pin.set_title("New PIN")
@@ -557,18 +1108,15 @@ class EnrollPinDialog(Adw.PreferencesWindow):
         grp.add(self.row_confirm)
 
         if self.need_pwd:
-            self.row_pwd.connect("entry-activated", lambda w: self.row_pin.grab_focus())
+            self.row_pwd.connect("entry-activated", lambda w: self.row_pwd_confirm.grab_focus())
+            self.row_pwd_confirm.connect("entry-activated", lambda w: self.row_pin.grab_focus())
         self.row_pin.connect("entry-activated", lambda w: self.row_confirm.grab_focus())
         self.row_confirm.connect("entry-activated", self.on_save)
-
-        page.add(grp)
-        self.add(page)
 
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         btn_box.set_halign(Gtk.Align.END)
         btn_box.set_margin_top(16)
-        btn_box.set_margin_bottom(16)
-        btn_box.set_margin_end(16)
+        btn_box.set_margin_bottom(8)
 
         self.btn_cancel = Gtk.Button(label="Cancel")
         self.btn_cancel.connect("clicked", lambda b: self.close())
@@ -580,50 +1128,42 @@ class EnrollPinDialog(Adw.PreferencesWindow):
         btn_box.append(self.btn_save)
 
         grp.add(btn_box)
+        page.add(grp)
+        toolbar.set_content(page)
+        self.set_content(toolbar)
 
     def on_save(self, btn):
         if self._busy:
             return
         pwd = self.row_pwd.get_text() if self.need_pwd else ""
+        confirm_pwd = self.row_pwd_confirm.get_text() if self.need_pwd else ""
         pin = self.row_pin.get_text()
         confirm = self.row_confirm.get_text()
 
         if self.need_pwd and not pwd:
             self._show_err("Please enter your current login password (or disable Auto-Unlock Desktop Keyring).")
             return
-
-        if (self.need_pwd and _has_control_chars(pwd)) or _has_control_chars(pin) or _has_control_chars(confirm):
+        if self.need_pwd and pwd != confirm_pwd:
+            self._show_err("Login passwords do not match.")
+            return
+        if (self.need_pwd and (_has_control_chars(pwd) or _has_control_chars(confirm_pwd))) or \
+           _has_control_chars(pin) or _has_control_chars(confirm):
             self._show_err("PIN and password cannot contain newline or control characters.")
             return
-
         if pin != confirm:
             self._show_err("PINs do not match.")
             return
 
-        min_len = int(self.parent_win.state.get("min_length", 4))
-        max_len = int(self.parent_win.state.get("max_length", 32))
-        digits_only = bool(self.parent_win.state.get("digits_only", True))
-        pin_byte_len = len(pin.encode("utf-8"))
-
-        if pin_byte_len < min_len:
-            self._show_err(f"PIN is too short (minimum {min_len} bytes required).")
-            return
-        if pin_byte_len > max_len:
-            self._show_err(f"PIN is too long (maximum {max_len} bytes allowed).")
-            return
-        if digits_only and not (pin.isascii() and pin.isdigit()):
-            self._show_err("PIN must contain ASCII numbers only (0-9).")
-            return
-        if pin_byte_len >= 4 and len(set(pin)) == 1:
-            self._show_err("PIN cannot consist of all identical characters.")
+        err_msg = _validate_pin_client(pin, self.parent_win.state)
+        if err_msg:
+            self._show_err(err_msg)
             return
 
-        # Pass secrets securely over stdin pipe rather than cmdline argv (matches pwd + confirm_pwd + pin + confirm_pin)
-        input_data = f"{pwd}\n{pwd}\n{pin}\n{confirm}\n" if self.need_pwd else f"{pin}\n{confirm}\n"
+        input_data = f"{pwd}\n{confirm_pwd}\n{pin}\n{confirm}\n" if self.need_pwd else f"{pin}\n{confirm}\n"
 
-        # Clear memory in UI widgets immediately before dispatching async helper
         if self.need_pwd:
             self.row_pwd.set_text("")
+            self.row_pwd_confirm.set_text("")
         self.row_pin.set_text("")
         self.row_confirm.set_text("")
 
@@ -641,6 +1181,7 @@ class EnrollPinDialog(Adw.PreferencesWindow):
             if ok:
                 self.close()
                 self.parent_win.refresh_ui_async()
+                self.parent_win.add_toast(Adw.Toast.new("PIN enrolled and sealed in TPM 2.0."))
             else:
                 self._show_err(f"Enrollment failed: {msg}")
             return GLib.SOURCE_REMOVE
@@ -657,7 +1198,227 @@ class EnrollPinDialog(Adw.PreferencesWindow):
         dialog.present()
 
 
+class ChangePinDialog(Adw.Window):
+    def __init__(self, parent_win):
+        super().__init__()
+        self.set_transient_for(parent_win)
+        self.set_modal(True)
+        self.set_title("Change PIN")
+        self.set_default_size(480, 440)
+        self.parent_win = parent_win
+        self._busy = False
+        self.connect("close-request", lambda *_: self._busy)
+
+        toolbar = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        toolbar.add_top_bar(header)
+
+        page = Adw.PreferencesPage()
+        grp = Adw.PreferencesGroup()
+        grp.set_title("Rotate TPM PIN")
+        grp.set_description("Verify your current PIN to re-seal a new PIN while preserving any saved keyring password.")
+
+        self.row_old = Adw.PasswordEntryRow()
+        self.row_old.set_title("Current PIN")
+        grp.add(self.row_old)
+
+        self.row_new = Adw.PasswordEntryRow()
+        self.row_new.set_title("New PIN")
+        grp.add(self.row_new)
+
+        self.row_confirm = Adw.PasswordEntryRow()
+        self.row_confirm.set_title("Confirm New PIN")
+        grp.add(self.row_confirm)
+
+        self.row_old.connect("entry-activated", lambda w: self.row_new.grab_focus())
+        self.row_new.connect("entry-activated", lambda w: self.row_confirm.grab_focus())
+        self.row_confirm.connect("entry-activated", self.on_save)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        btn_box.set_halign(Gtk.Align.END)
+        btn_box.set_margin_top(16)
+        btn_box.set_margin_bottom(8)
+
+        self.btn_reenroll = Gtk.Button(label="Re-enroll / Update Password…")
+        self.btn_reenroll.connect("clicked", self.on_switch_reenroll)
+        btn_box.append(self.btn_reenroll)
+
+        self.btn_cancel = Gtk.Button(label="Cancel")
+        self.btn_cancel.connect("clicked", lambda b: self.close())
+        btn_box.append(self.btn_cancel)
+
+        self.btn_save = Gtk.Button(label="Change PIN")
+        self.btn_save.add_css_class("suggested-action")
+        self.btn_save.connect("clicked", self.on_save)
+        btn_box.append(self.btn_save)
+
+        grp.add(btn_box)
+        page.add(grp)
+        toolbar.set_content(page)
+        self.set_content(toolbar)
+
+    def on_switch_reenroll(self, btn):
+        if self._busy:
+            return
+        self.close()
+        EnrollPinDialog(self.parent_win).present()
+
+    def on_save(self, btn):
+        if self._busy:
+            return
+        old_pin = self.row_old.get_text()
+        new_pin = self.row_new.get_text()
+        confirm = self.row_confirm.get_text()
+
+        if not old_pin:
+            self._show_err("Please enter your current PIN.")
+            return
+        if _has_control_chars(old_pin) or _has_control_chars(new_pin) or _has_control_chars(confirm):
+            self._show_err("PINs cannot contain newline or control characters.")
+            return
+        if new_pin != confirm:
+            self._show_err("New PINs do not match.")
+            return
+
+        err_msg = _validate_pin_client(new_pin, self.parent_win.state)
+        if err_msg:
+            self._show_err(err_msg)
+            return
+
+        input_data = f"{old_pin}\n{new_pin}\n{confirm}\n"
+        self.row_old.set_text("")
+        self.row_new.set_text("")
+        self.row_confirm.set_text("")
+
+        self._busy = True
+        self.btn_save.set_sensitive(False)
+        self.btn_cancel.set_sensitive(False)
+        self.btn_reenroll.set_sensitive(False)
+
+        target_user = self.parent_win.state.get("user")
+        cmd = ["change-pin", "--user", target_user] if target_user and target_user != "unknown" else ["change-pin"]
+
+        def on_done(ok, msg):
+            self._busy = False
+            self.btn_save.set_sensitive(True)
+            self.btn_cancel.set_sensitive(True)
+            self.btn_reenroll.set_sensitive(True)
+            self.parent_win.refresh_ui_async()
+            if ok:
+                self.close()
+                self.parent_win.add_toast(Adw.Toast.new("PIN changed and re-sealed in TPM 2.0."))
+            else:
+                self._show_err(msg or "Failed to change PIN.")
+            return GLib.SOURCE_REMOVE
+
+        self.parent_win.run_ctl_async(cmd, on_done, need_root=True, input_text=input_data)
+
+    def _show_err(self, msg):
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            heading="Change PIN Failed",
+            body=msg
+        )
+        dialog.add_response("ok", "OK")
+        dialog.present()
+
+
+class VerifyPinDialog(Adw.Window):
+    def __init__(self, parent_win):
+        super().__init__()
+        self.set_transient_for(parent_win)
+        self.set_modal(True)
+        self.set_title("Test PIN")
+        self.set_default_size(440, 290)
+        self.parent_win = parent_win
+        self._busy = False
+        self.connect("close-request", lambda *_: self._busy)
+
+        toolbar = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        toolbar.add_top_bar(header)
+
+        page = Adw.PreferencesPage()
+        grp = Adw.PreferencesGroup()
+        grp.set_title("Verify Enrolled PIN")
+        grp.set_description("Test unsealing your key against the hardware TPM 2.0.")
+
+        self.row_pin = Adw.PasswordEntryRow()
+        self.row_pin.set_title("Current PIN")
+        self.row_pin.connect("entry-activated", self.on_verify)
+        grp.add(self.row_pin)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        btn_box.set_halign(Gtk.Align.END)
+        btn_box.set_margin_top(16)
+        btn_box.set_margin_bottom(8)
+
+        self.btn_cancel = Gtk.Button(label="Cancel")
+        self.btn_cancel.connect("clicked", lambda b: self.close())
+        btn_box.append(self.btn_cancel)
+
+        self.btn_verify = Gtk.Button(label="Verify")
+        self.btn_verify.add_css_class("suggested-action")
+        self.btn_verify.connect("clicked", self.on_verify)
+        btn_box.append(self.btn_verify)
+
+        grp.add(btn_box)
+        page.add(grp)
+        toolbar.set_content(page)
+        self.set_content(toolbar)
+
+    def on_verify(self, widget):
+        if self._busy:
+            return
+        pin = self.row_pin.get_text()
+        if not pin:
+            self._show_err("Please enter your PIN.")
+            return
+        if _has_control_chars(pin):
+            self._show_err("PIN cannot contain newline or control characters.")
+            return
+
+        input_data = f"{pin}\n"
+        self.row_pin.set_text("")
+
+        self._busy = True
+        self.btn_verify.set_sensitive(False)
+        self.btn_cancel.set_sensitive(False)
+
+        target_user = self.parent_win.state.get("user")
+        cmd = ["verify", "--user", target_user] if target_user and target_user != "unknown" else ["verify"]
+
+        def on_done(ok, msg):
+            self._busy = False
+            self.btn_verify.set_sensitive(True)
+            self.btn_cancel.set_sensitive(True)
+            self.parent_win.refresh_ui_async()
+            if ok:
+                self.close()
+                if "keyring password successfully unsealed" in (msg or "").lower():
+                    self.parent_win.add_toast(Adw.Toast.new("PIN verified against TPM 2.0 (keyring unsealed)."))
+                else:
+                    self.parent_win.add_toast(Adw.Toast.new("PIN verified against TPM 2.0."))
+            else:
+                self._show_err(msg or "PIN verification failed.")
+            return GLib.SOURCE_REMOVE
+
+        self.parent_win.run_ctl_async(cmd, on_done, need_root=True, input_text=input_data)
+
+    def _show_err(self, msg):
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            heading="Verification Failed",
+            body=msg
+        )
+        dialog.add_response("ok", "OK")
+        dialog.present()
+
+
 def main():
+    if "--version" in sys.argv[1:] or "-V" in sys.argv[1:]:
+        print(f"tpm-pin-settings {APP_VERSION}")
+        return 0
     app = TpmPinSettingsApp()
     return app.run(sys.argv)
 

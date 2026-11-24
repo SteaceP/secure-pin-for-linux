@@ -1,6 +1,6 @@
 
 cmake_minimum_required(VERSION 3.16)
-project(tpm-pin VERSION 1.0.8 LANGUAGES C)
+project(tpm-pin VERSION 1.0.9 LANGUAGES C)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 17)
@@ -82,6 +82,11 @@ if(NOT BUILD_GUI_ONLY)
         PATHS /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE} /usr/lib64 /usr/lib /usr/local/lib
     )
 
+    find_path(CRYPT_INCLUDE_DIR NAMES crypt.h)
+    find_library(CRYPT_LIB NAMES crypt libcrypt.so.2 libcrypt.so.1
+        PATHS /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE} /usr/lib64 /usr/lib /usr/local/lib
+    )
+
     set(TSS2_LIBS ${TSS2_ESYS_LIB} ${TSS2_MU_LIB})
     if(TSS2_TCTI_DEV_LIB)
         list(APPEND TSS2_LIBS ${TSS2_TCTI_DEV_LIB})
@@ -124,22 +129,39 @@ if(NOT BUILD_GUI_ONLY)
     )
     target_link_options(pam_tpm_pin PRIVATE "-Wl,--no-undefined")
 
-    add_executable(tpm-pin-ctl src/cli/tpm_pin_ctl.c)
+    add_executable(tpm-pin-ctl
+        src/cli/tpm_pin_ctl.c
+        src/common/password_verify.c
+    )
+    target_compile_definitions(tpm-pin-ctl PRIVATE
+        TPM_PIN_VERIFY_PATH="${CMAKE_INSTALL_FULL_LIBEXECDIR}/tpm-pin-verify"
+    )
     target_link_libraries(tpm-pin-ctl PRIVATE
         tpmpin_common
         ${PAM_LIB}
     )
+    if(CRYPT_INCLUDE_DIR AND CRYPT_LIB)
+        target_compile_definitions(tpm-pin-ctl PRIVATE HAVE_LIBCRYPT=1)
+        target_link_libraries(tpm-pin-ctl PRIVATE ${CRYPT_LIB})
+    endif()
 
     add_executable(tpm-pin-verify src/cli/tpm_pin_verify.c)
     target_link_libraries(tpm-pin-verify PRIVATE
         tpmpin_common
     )
 
-    add_executable(test_pam_harness tests/test_pam_harness.c)
+    add_executable(test_pam_harness
+        tests/test_pam_harness.c
+        src/common/password_verify.c
+    )
     target_link_libraries(test_pam_harness PRIVATE
         tpmpin_common
         ${PAM_LIB}
     )
+    if(CRYPT_INCLUDE_DIR AND CRYPT_LIB)
+        target_compile_definitions(test_pam_harness PRIVATE HAVE_LIBCRYPT=1)
+        target_link_libraries(test_pam_harness PRIVATE ${CRYPT_LIB})
+    endif()
 
     install(TARGETS pam_tpm_pin
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/security
@@ -178,6 +200,33 @@ if(NOT BUILD_GUI_ONLY)
     install(FILES packaging/systemd/tpm-pin-tmpfiles.conf
         DESTINATION ${TMPFILES_DIR}
         RENAME tpm-pin.conf
+    )
+
+    install(FILES docs/man/tpm-pin-ctl.1
+        DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+    )
+
+    install(FILES docs/man/pam_tpm_pin.8
+        DESTINATION ${CMAKE_INSTALL_MANDIR}/man8
+    )
+
+    install(FILES packaging/completions/tpm-pin-ctl.bash
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions
+        RENAME tpm-pin-ctl
+    )
+
+    install(FILES packaging/completions/_tpm-pin-ctl
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/zsh/site-functions
+    )
+
+    install(FILES packaging/completions/tpm-pin-ctl.fish
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d
+    )
+
+    install(FILES
+        gui/gnome-extension/extension.js
+        gui/gnome-extension/metadata.json
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/gnome-shell/extensions/secure-pin@coderage.pro
     )
 endif()
 
@@ -268,6 +317,17 @@ if(NOT BUILD_GUI_ONLY)
         /usr/share/pam-configs
         /usr/share/polkit-1
         /usr/share/polkit-1/actions
+        /usr/share/man
+        /usr/share/man/man1
+        /usr/share/man/man8
+        /usr/share/bash-completion
+        /usr/share/bash-completion/completions
+        /usr/share/zsh
+        /usr/share/zsh/site-functions
+        /usr/share/fish
+        /usr/share/fish/vendor_completions.d
+        /usr/share/gnome-shell
+        /usr/share/gnome-shell/extensions
     )
     set(CPACK_RPM_FILE_NAME "RPM-DEFAULT")
 

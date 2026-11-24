@@ -1,3 +1,10 @@
+* Tue Nov 24 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.9-1
+- Add PIN rotation (change-pin), enrolled user listing (list), config listing, --version, and doctor diagnostics
+- Verify local login passwords against shadow hashes before sealing for keyring auto-unlock
+- Separate Polkit scope (enable_polkit) from sudo and reject simple sequential/repeating PINs
+- Upgrade GTK4/Libadwaita Settings app with Test PIN, Change PIN, DA policy controls, actionable banners, Diagnostics tab, and About dialog
+- Add live status polling in GNOME Shell Quick Settings extension, man pages, and bash/zsh/fish completions
+
 * Mon Nov 23 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.8-1
 - Remove unprivileged udev uaccess rule on /dev/tpmrm* and require root for DA reset/config
 - Fix GUI PIN enrollment stdin protocol regression and make GUI CLI execution asynchronous
