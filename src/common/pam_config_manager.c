@@ -125,6 +125,22 @@ static bool file_contains_auth_module(const char *filepath, const char *module_n
     return found;
 }
 
+static bool file_contains_any_tpm_pin_rule(const char *filepath) {
+    FILE *f = fopen(filepath, "re");
+    if (!f) return false;
+    char line[1024];
+    bool found = false;
+    while (fgets(line, sizeof(line), f)) {
+        if ((is_auth_rule_line(line) || is_pam_type_line(line, "password")) &&
+            strstr(line, "pam_tpm_pin.so")) {
+            found = true;
+            break;
+        }
+    }
+    fclose(f);
+    return found;
+}
+
 /*
  * Runs argv[0] (absolute path) with the given arguments, without a shell, with
  * stdin/stdout/stderr redirected to /dev/null. Returns the exit status, or -1.
@@ -592,7 +608,7 @@ bool pam_manager_apply_auth_file(const char *filepath) {
 
 bool pam_manager_remove_from_file(const char *filepath) {
     if (!filepath) return false;
-    if (!file_contains_auth_module(filepath, "pam_tpm_pin.so")) return true;
+    if (!file_contains_any_tpm_pin_rule(filepath)) return true;
 
     char resolved[4096];
     const char *target = filepath;
@@ -630,12 +646,144 @@ bool pam_manager_remove_from_file(const char *filepath) {
 
     char line[1024];
     while (fgets(line, sizeof(line), in)) {
-        if (!(is_auth_rule_line(line) && strstr(line, "pam_tpm_pin.so"))) {
+        if (!((is_auth_rule_line(line) || is_pam_type_line(line, "password")) &&
+              strstr(line, "pam_tpm_pin.so"))) {
             fputs(line, out);
         }
     }
 
     fclose(in);
+    if (ferror(out) || fchmod(fd, orig_mode) != 0 || fflush(out) != 0 || fsync(fd) != 0) {
+        fclose(out);
+        unlink(tmp_file);
+        return false;
+    }
+    if (fclose(out) != 0) {
+        unlink(tmp_file);
+        return false;
+    }
+
+    if (rename(tmp_file, target) != 0) {
+        unlink(tmp_file);
+        return false;
+    }
+    run_restorecon(target);
+    return true;
+}
+
+bool pam_manager_configure_password_hook(const char *filepath, bool enable) {
+    if (!filepath) return false;
+
+    FILE *scan = fopen(filepath, "re");
+    if (!scan) return false;
+
+    bool has_password_rule = false;
+    bool has_tpm_pin_pwd = false;
+    char line[1024];
+    while (fgets(line, sizeof(line), scan)) {
+        if (is_pam_type_line(line, "password")) {
+            if (strstr(line, "pam_tpm_pin.so")) {
+                has_tpm_pin_pwd = true;
+            } else {
+                has_password_rule = true;
+            }
+        }
+    }
+    fclose(scan);
+
+    if (!enable && !has_tpm_pin_pwd) {
+        return true;
+    }
+    if (enable && !has_password_rule) {
+        return true;
+    }
+
+    char resolved[4096];
+    const char *target = filepath;
+    if (realpath(filepath, resolved)) {
+        target = resolved;
+    }
+
+    char backup[4160];
+    create_backup(target, backup, sizeof(backup));
+
+    struct stat orig_st;
+    mode_t orig_mode = 0644;
+    if (stat(target, &orig_st) == 0) {
+        orig_mode = orig_st.st_mode & 07777;
+    }
+
+    FILE *in = fopen(target, "re");
+    if (!in) return false;
+
+    char *lines[PAM_FILE_MAX_LINES];
+    size_t count = 0;
+    bool load_ok = true;
+    while (fgets(line, sizeof(line), in)) {
+        if (is_pam_type_line(line, "password") && strstr(line, "pam_tpm_pin.so")) {
+            continue;
+        }
+        if (count >= PAM_FILE_MAX_LINES || !(lines[count] = strdup(line))) {
+            load_ok = false;
+            break;
+        }
+        count++;
+    }
+    fclose(in);
+    if (!load_ok) {
+        free_lines(lines, count);
+        return false;
+    }
+
+    size_t insert_at = count;
+    if (enable) {
+        size_t first_sufficient = count;
+        size_t last_password = count;
+        for (size_t i = 0; i < count; i++) {
+            if (!is_pam_type_line(lines[i], "password")) continue;
+            last_password = i;
+            if (first_sufficient == count && is_sufficient_or_done_rule(lines[i])) {
+                first_sufficient = i;
+            }
+        }
+        if (first_sufficient < count) {
+            insert_at = first_sufficient;
+        } else if (last_password < count) {
+            insert_at = last_password + 1;
+        }
+    }
+
+    char tmp_file[4160];
+    snprintf(tmp_file, sizeof(tmp_file), "%s.tpm_pwd_tmp.%d", target, (int)getpid());
+    unlink(tmp_file);
+    int fd = open(tmp_file, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, orig_mode);
+    if (fd < 0) {
+        free_lines(lines, count);
+        return false;
+    }
+    FILE *out = fdopen(fd, "we");
+    if (!out) {
+        close(fd);
+        unlink(tmp_file);
+        free_lines(lines, count);
+        return false;
+    }
+
+    const char *pwd_rule = "-password\toptional\tpam_tpm_pin.so";
+    for (size_t i = 0; i < count; i++) {
+        if (enable && i == insert_at) {
+            fprintf(out, "%s\n", pwd_rule);
+        }
+        fputs(lines[i], out);
+    }
+    if (enable && insert_at >= count) {
+        if (count > 0 && lines[count - 1][strlen(lines[count - 1]) - 1] != '\n') {
+            fputc('\n', out);
+        }
+        fprintf(out, "%s\n", pwd_rule);
+    }
+    free_lines(lines, count);
+
     if (ferror(out) || fchmod(fd, orig_mode) != 0 || fflush(out) != 0 || fsync(fd) != 0) {
         fclose(out);
         unlink(tmp_file);
@@ -978,6 +1126,8 @@ static bool authselect_enable(bool want_keyring) {
         /* Already selected: refresh the PIN rule in our profile templates and regenerate */
         bool ok = pam_manager_apply_fedora_file(TPM_AUTHSELECT_DIR "/system-auth");
         ok = pam_manager_apply_fedora_file(TPM_AUTHSELECT_DIR "/password-auth") && ok;
+        ok = pam_manager_configure_password_hook(TPM_AUTHSELECT_DIR "/system-auth", true) && ok;
+        ok = pam_manager_configure_password_hook(TPM_AUTHSELECT_DIR "/password-auth", true) && ok;
         if (ok) {
             const char *argv[] = { AUTHSELECT_BIN, "apply-changes", NULL };
             ok = (run_argv(argv) == 0);
@@ -1019,6 +1169,8 @@ static bool authselect_enable(bool want_keyring) {
               (added[0] == '\0' || write_profile_state_file(TPM_AUTHSELECT_ADDED_FILE, added)) &&
               pam_manager_apply_fedora_file(TPM_AUTHSELECT_DIR "/system-auth") &&
               pam_manager_apply_fedora_file(TPM_AUTHSELECT_DIR "/password-auth") &&
+              pam_manager_configure_password_hook(TPM_AUTHSELECT_DIR "/system-auth", true) &&
+              pam_manager_configure_password_hook(TPM_AUTHSELECT_DIR "/password-auth", true) &&
               authselect_select(TPM_AUTHSELECT_PROFILE, features);
 
     if (!ok && !is_tpm_pin_profile(current_profile)) {
@@ -1087,6 +1239,9 @@ bool pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_l
         /* Fallback: direct safe insertion in /etc/pam.d/common-auth */
         if (!enabled && faccessat(AT_FDCWD, "/etc/pam.d/common-auth", W_OK, AT_EACCESS) == 0) {
             enabled = pam_manager_apply_auth_file("/etc/pam.d/common-auth");
+            if (enabled && faccessat(AT_FDCWD, "/etc/pam.d/common-password", W_OK, AT_EACCESS) == 0) {
+                (void)pam_manager_configure_password_hook("/etc/pam.d/common-password", true);
+            }
         }
     } else if (distro == DISTRO_FEDORA_RHEL) {
         bool want_keyring = cfg ? cfg->enable_keyring_unlock : true;
@@ -1098,11 +1253,13 @@ bool pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_l
             bool ok = true;
             if (faccessat(AT_FDCWD, "/etc/pam.d/system-auth", W_OK, AT_EACCESS) == 0) {
                 bool r = pam_manager_apply_fedora_file("/etc/pam.d/system-auth");
+                if (r) (void)pam_manager_configure_password_hook("/etc/pam.d/system-auth", true);
                 any_applied = any_applied || r;
                 ok = ok && r;
             }
             if (faccessat(AT_FDCWD, "/etc/pam.d/password-auth", W_OK, AT_EACCESS) == 0) {
                 bool r = pam_manager_apply_fedora_file("/etc/pam.d/password-auth");
+                if (r) (void)pam_manager_configure_password_hook("/etc/pam.d/password-auth", true);
                 any_applied = any_applied || r;
                 ok = ok && r;
             }
@@ -1111,11 +1268,17 @@ bool pam_manager_enable(const tpm_pin_config_t *cfg, char *err_buf, size_t err_l
     } else if (distro == DISTRO_OPENSUSE) {
         if (faccessat(AT_FDCWD, "/etc/pam.d/common-auth", W_OK, AT_EACCESS) == 0) {
             enabled = pam_manager_apply_auth_file("/etc/pam.d/common-auth");
+            if (enabled && faccessat(AT_FDCWD, "/etc/pam.d/common-password", W_OK, AT_EACCESS) == 0) {
+                (void)pam_manager_configure_password_hook("/etc/pam.d/common-password", true);
+            }
         }
     } else {
         /* Arch Linux or Generic */
         if (faccessat(AT_FDCWD, "/etc/pam.d/system-auth", W_OK, AT_EACCESS) == 0) {
             enabled = pam_manager_apply_auth_file("/etc/pam.d/system-auth");
+            if (enabled) {
+                (void)pam_manager_configure_password_hook("/etc/pam.d/system-auth", true);
+            }
         }
         if (enabled && distro == DISTRO_ARCH) {
             bool want_keyring = cfg ? cfg->enable_keyring_unlock : true;
@@ -1150,13 +1313,17 @@ bool pam_manager_disable_ex(bool uninstall_mode, char *err_buf, size_t err_len) 
             const char *argv[] = { "/usr/sbin/pam-auth-update", "--package", "--remove", "tpm-pin", NULL };
             if (run_argv(argv) != 0) ok = false;
         }
-        if (access("/etc/pam.d/common-auth", F_OK) == 0) {
-            if (!pam_manager_remove_from_file("/etc/pam.d/common-auth")) ok = false;
-        }
     }
 
     if (distro == DISTRO_FEDORA_RHEL && authselect_is_active()) {
         if (!authselect_disable()) ok = false;
+    }
+
+    if (access("/etc/pam.d/common-auth", F_OK) == 0) {
+        if (!pam_manager_remove_from_file("/etc/pam.d/common-auth")) ok = false;
+    }
+    if (access("/etc/pam.d/common-password", F_OK) == 0) {
+        if (!pam_manager_remove_from_file("/etc/pam.d/common-password")) ok = false;
     }
 
     if (access("/etc/pam.d/system-auth", F_OK) == 0) {

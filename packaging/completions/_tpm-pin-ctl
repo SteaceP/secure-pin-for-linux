@@ -6,6 +6,7 @@ _tpm_pin_ctl() {
         'status:Show TPM, PIN, PAM, and policy status'
         'enroll:Enroll or re-enroll a TPM-backed PIN'
         'change-pin:Change an enrolled PIN while keeping keyring unlock password'
+        'sync-keyring:Re-seal updated login password for keyring auto-unlock'
         'verify:Verify an enrolled PIN against the TPM'
         'remove:Remove an enrolled user PIN'
         'list:List enrolled users'
@@ -45,7 +46,7 @@ _tpm_pin_ctl() {
         status|doctor)
             _arguments '--json[Output JSON]' '--user[Target username]:username:_users'
             ;;
-        enroll|change-pin)
+        enroll|change-pin|sync-keyring)
             _arguments '--user[Target username]:username:_users' '--pin[PIN value]:pin:' '--password[Login password]:password:'
             ;;
         verify)

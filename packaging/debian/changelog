@@ -1,3 +1,12 @@
+tpm-pin (1.0.10-1) unstable; urgency=medium
+
+  * Hook pam_sm_chauthtok to flag stale sealed keyring passwords on login password change and add sync-keyring CLI/GUI workflow.
+  * Add LOG_AUTHPRIV pam_syslog auditing for PAM PIN authentication outcomes and keyring staleness events.
+  * Add bounded TPM transient error retries (TPM2_RC_RETRY/TESTING/YIELDED), UEFI Secure Boot / PCR 7 population checks, and ownerAuth/lockoutAuth diagnostics.
+  * Fix openSUSE common-auth/common-password cleanup on disable/uninstall and preserve Arch PAM opt-out on post_upgrade.
+
+ -- Secure PIN Maintainers <steace@coderage.pro>  Tue, 24 Nov 2026 13:05:00 -0500
+
 tpm-pin (1.0.9-1) unstable; urgency=medium
 
   * Add PIN rotation (change-pin), enrolled user listing (list), config listing, --version, and comprehensive doctor diagnostics.

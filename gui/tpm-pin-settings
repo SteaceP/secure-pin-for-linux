@@ -19,7 +19,7 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gdk, Gio, GLib, GObject
 
 APP_ID = "io.github.securepin.Settings"
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.0.10"
 
 
 def _has_control_chars(value):
@@ -236,6 +236,12 @@ class TpmPinMainWindow(Adw.ApplicationWindow):
                 "is_enrolled": False,
                 "pcr7_bound": False,
                 "keyring_pwd_saved": False,
+                "keyring_pwd_stale": False,
+                "owner_auth_set": False,
+                "lockout_auth_set": False,
+                "secure_boot_state": -1,
+                "pcr7_checked": False,
+                "pcr7_populated": False,
                 "pam_enabled": False,
                 "distro": "Linux",
                 "digits_only": True,
@@ -571,6 +577,7 @@ class TpmPinMainWindow(Adw.ApplicationWindow):
         pcr7_bound = self.state.get("pcr7_bound", False)
         bind_pcr7 = self.state.get("bind_pcr7", False)
         keyring_saved = self.state.get("keyring_pwd_saved", False)
+        keyring_stale = self.state.get("keyring_pwd_stale", False)
         enable_keyring = self.state.get("enable_keyring_unlock", True)
 
         self._banner_action = None
@@ -582,6 +589,11 @@ class TpmPinMainWindow(Adw.ApplicationWindow):
             self.banner.set_title("TPM Dictionary Attack lockout is active. Reset the lockout counter to re-enable PIN sign-in.")
             self.banner.set_button_label("Reset Lockout")
             self._banner_action = "reset_da"
+            self.banner.set_revealed(True)
+        elif enrolled and keyring_stale:
+            self.banner.set_title("Your login password changed since enrollment. Sync your keyring password to restore auto-unlock.")
+            self.banner.set_button_label("Sync Keyring")
+            self._banner_action = "sync_keyring"
             self.banner.set_revealed(True)
         elif enrolled and not pam_enabled:
             self.banner.set_title("Your PIN is enrolled, but PAM integration is currently disabled.")
@@ -610,6 +622,8 @@ class TpmPinMainWindow(Adw.ApplicationWindow):
         action = self._banner_action
         if action == "reset_da":
             self.on_reset_da_clicked(self.btn_reset_da)
+        elif action == "sync_keyring":
+            SyncKeyringDialog(self).present()
         elif action == "enable_pam":
             if not self.sw_pam.get_active():
                 self.sw_pam.set_active(True)
@@ -650,6 +664,7 @@ class TpmPinMainWindow(Adw.ApplicationWindow):
             bus_enc = self.state.get("bus_encryption", "Active (AES-128-CFB)")
             host_ok = self.state.get("host_installed", True)
 
+            owner_auth_note = " (ownerAuthSet — clear ownerAuth to enroll)" if self.state.get("owner_auth_set", False) else ""
             if not host_ok:
                 self.row_tpm.set_subtitle("Host service not installed (install tpm-pin on host system)")
                 self.row_hw.set_subtitle("Flatpak Sandbox (Host Integration)")
@@ -667,7 +682,7 @@ class TpmPinMainWindow(Adw.ApplicationWindow):
                 self.row_bus.set_subtitle(bus_enc)
             else:
                 self.btn_enroll.set_sensitive(True)
-                self.row_tpm.set_subtitle(f"{mfg} — Hardware security active")
+                self.row_tpm.set_subtitle(f"{mfg} — Hardware security active{owner_auth_note}")
                 self.row_hw.set_subtitle(hw_type)
                 self.row_bus.set_subtitle(bus_enc)
 
@@ -686,7 +701,10 @@ class TpmPinMainWindow(Adw.ApplicationWindow):
                 if self.state.get("pcr7_bound", False):
                     details.append("PCR 7 Bound")
                 if self.state.get("keyring_pwd_saved", False):
-                    details.append("Keyring Auto-Unlock")
+                    if self.state.get("keyring_pwd_stale", False):
+                        details.append("Keyring Out of Sync")
+                    else:
+                        details.append("Keyring Auto-Unlock")
                 self.row_enroll.set_subtitle(" • ".join(details))
                 self.btn_enroll.set_label("Change PIN")
                 self.btn_test.set_visible(True)
@@ -703,12 +721,13 @@ class TpmPinMainWindow(Adw.ApplicationWindow):
             failed_tries = self.state.get("failed_tries", 0)
             max_tries = self.state.get("max_tries", 0)
             da_cfg_tries = self.state.get("da_max_tries", 5)
+            lockout_auth_note = " • lockoutAuthSet" if self.state.get("lockout_auth_set", False) else ""
             if locked_out:
-                self.row_da.set_subtitle(f"LOCKED OUT ({failed_tries}/{max_tries} failed attempts) — Click Reset Lockout")
+                self.row_da.set_subtitle(f"LOCKED OUT ({failed_tries}/{max_tries} failed attempts) — Click Reset Lockout{lockout_auth_note}")
             elif max_tries > 0:
-                self.row_da.set_subtitle(f"Ready ({failed_tries}/{max_tries} hardware attempts used, policy max: {da_cfg_tries})")
+                self.row_da.set_subtitle(f"Ready ({failed_tries}/{max_tries} hardware attempts used, policy max: {da_cfg_tries}){lockout_auth_note}")
             else:
-                self.row_da.set_subtitle(f"{da_cfg_tries} max failed attempts before hardware rate-limit")
+                self.row_da.set_subtitle(f"{da_cfg_tries} max failed attempts before hardware rate-limit{lockout_auth_note}")
 
             self.btn_reset_da.set_sensitive(host_ok and tpm_ok)
 
@@ -724,6 +743,13 @@ class TpmPinMainWindow(Adw.ApplicationWindow):
             self.spin_min.set_value(int(self.state.get("min_length", 4)))
             self.spin_max.set_value(int(self.state.get("max_length", 32)))
             self.sw_pcr.set_active(bool(self.state.get("bind_pcr7", False)))
+            sb_state = int(self.state.get("secure_boot_state", -1))
+            if sb_state == 0:
+                self.sw_pcr.set_subtitle("UEFI Secure Boot is currently disabled — PCR 7 binding may not protect boot integrity")
+            elif sb_state == 1 and self.state.get("pcr7_checked", False) and not self.state.get("pcr7_populated", True):
+                self.sw_pcr.set_subtitle("UEFI Secure Boot is enabled, but SHA-256 PCR 7 currently reads all zeroes")
+            else:
+                self.sw_pcr.set_subtitle("Disables PIN if firmware, bootloader, or Secure Boot state is tampered with")
 
             da_rec = int(self.state.get("da_recovery_time", 600))
             da_lock = int(self.state.get("da_lockout_recovery", 86400))
@@ -1409,6 +1435,117 @@ class VerifyPinDialog(Adw.Window):
         dialog = Adw.MessageDialog(
             transient_for=self,
             heading="Verification Failed",
+            body=msg
+        )
+        dialog.add_response("ok", "OK")
+        dialog.present()
+
+
+class SyncKeyringDialog(Adw.Window):
+    def __init__(self, parent_win):
+        super().__init__()
+        self.set_transient_for(parent_win)
+        self.set_modal(True)
+        self.set_title("Sync Keyring Password")
+        self.set_default_size(480, 440)
+        self.parent_win = parent_win
+        self._busy = False
+        self.connect("close-request", lambda *_: self._busy)
+
+        toolbar = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        toolbar.add_top_bar(header)
+
+        page = Adw.PreferencesPage()
+        grp = Adw.PreferencesGroup()
+        grp.set_title("Re-seal Login Password")
+        grp.set_description("Verify your current PIN and updated login password to restore automatic desktop keyring unlocking.")
+
+        self.row_pin = Adw.PasswordEntryRow()
+        self.row_pin.set_title("Current PIN")
+        grp.add(self.row_pin)
+
+        self.row_pwd = Adw.PasswordEntryRow()
+        self.row_pwd.set_title("Current Login Password")
+        grp.add(self.row_pwd)
+
+        self.row_pwd_confirm = Adw.PasswordEntryRow()
+        self.row_pwd_confirm.set_title("Confirm Login Password")
+        grp.add(self.row_pwd_confirm)
+
+        self.row_pin.connect("entry-activated", lambda w: self.row_pwd.grab_focus())
+        self.row_pwd.connect("entry-activated", lambda w: self.row_pwd_confirm.grab_focus())
+        self.row_pwd_confirm.connect("entry-activated", self.on_sync)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        btn_box.set_halign(Gtk.Align.END)
+        btn_box.set_margin_top(16)
+        btn_box.set_margin_bottom(8)
+
+        self.btn_cancel = Gtk.Button(label="Cancel")
+        self.btn_cancel.connect("clicked", lambda b: self.close())
+        btn_box.append(self.btn_cancel)
+
+        self.btn_sync = Gtk.Button(label="Sync Keyring")
+        self.btn_sync.add_css_class("suggested-action")
+        self.btn_sync.connect("clicked", self.on_sync)
+        btn_box.append(self.btn_sync)
+
+        grp.add(btn_box)
+        page.add(grp)
+        toolbar.set_content(page)
+        self.set_content(toolbar)
+
+    def on_sync(self, widget):
+        if self._busy:
+            return
+        pin = self.row_pin.get_text()
+        pwd = self.row_pwd.get_text()
+        confirm_pwd = self.row_pwd_confirm.get_text()
+
+        if not pin:
+            self._show_err("Please enter your current PIN.")
+            return
+        if not pwd:
+            self._show_err("Please enter your current login password.")
+            return
+        if pwd != confirm_pwd:
+            self._show_err("Login passwords do not match.")
+            return
+        if _has_control_chars(pin) or _has_control_chars(pwd) or _has_control_chars(confirm_pwd):
+            self._show_err("PIN and password cannot contain newline or control characters.")
+            return
+
+        input_data = f"{pin}\n{pwd}\n{confirm_pwd}\n"
+        self.row_pin.set_text("")
+        self.row_pwd.set_text("")
+        self.row_pwd_confirm.set_text("")
+
+        self._busy = True
+        self.btn_sync.set_sensitive(False)
+        self.btn_cancel.set_sensitive(False)
+
+        target_user = self.parent_win.state.get("user")
+        cmd = ["sync-keyring", "--user", target_user] if target_user and target_user != "unknown" else ["sync-keyring"]
+
+        def on_done(ok, msg):
+            self._busy = False
+            self.btn_sync.set_sensitive(True)
+            self.btn_cancel.set_sensitive(True)
+            self.parent_win.refresh_ui_async()
+            if ok:
+                self.close()
+                self.parent_win.add_toast(Adw.Toast.new("Keyring password synced in TPM 2.0."))
+            else:
+                self._show_err(msg or "Failed to sync keyring password.")
+            return GLib.SOURCE_REMOVE
+
+        self.parent_win.run_ctl_async(cmd, on_done, need_root=True, input_text=input_data)
+
+    def _show_err(self, msg):
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            heading="Sync Keyring Failed",
             body=msg
         )
         dialog.add_response("ok", "OK")

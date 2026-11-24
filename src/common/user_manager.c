@@ -821,6 +821,9 @@ bool tpm_pin_change_pin(uid_t uid, const char *old_pin, const char *new_pin,
     verify_cfg.digits_only = false;
     verify_cfg.min_length = 1;
     verify_cfg.max_length = TPM_PIN_MAX_PIN_LEN;
+    verify_cfg.disallow_simple_pins = false;
+
+    bool was_stale = tpm_pin_is_keyring_stale(uid, cfg);
 
     char unsealed_pwd[TPM_PIN_MAX_PASSWORD_LEN] = {0};
     int tpm_rc = 0;
@@ -831,22 +834,168 @@ bool tpm_pin_change_pin(uid_t uid, const char *old_pin, const char *new_pin,
     }
 
     const char *pwd_to_seal = NULL;
+    bool using_override = false;
     if (cfg->enable_keyring_unlock) {
         if (override_password && override_password[0] != '\0') {
             pwd_to_seal = override_password;
+            using_override = true;
         } else if (unsealed_pwd[0] != '\0') {
             pwd_to_seal = unsealed_pwd;
         }
     }
 
     bool ok = tpm_pin_enroll_user(uid, new_pin, pwd_to_seal, cfg);
+    if (ok && was_stale && !using_override && cfg->enable_keyring_unlock && pwd_to_seal != NULL) {
+        (void)tpm_pin_mark_keyring_stale(uid, cfg);
+    }
     tpm_pin_zero(unsealed_pwd, sizeof(unsealed_pwd));
     return ok;
+}
+
+bool tpm_pin_is_keyring_stale(uid_t uid, const tpm_pin_config_t *cfg) {
+    tpm_pin_config_t local_cfg;
+    if (!cfg) {
+        tpm_pin_config_load(NULL, &local_cfg);
+        cfg = &local_cfg;
+    }
+
+    if (!tpm_pin_user_is_enrolled(uid, cfg)) {
+        return false;
+    }
+
+    bool sys_dir = is_system_data_dir(cfg);
+    char meta_path[512];
+    get_user_meta_path(uid, cfg, meta_path, sizeof(meta_path));
+    uint32_t meta_flags = 0;
+    if (read_meta_flags(meta_path, sys_dir, &meta_flags)) {
+        return (meta_flags & FLAG_KEYRING_PWD_STALE) != 0;
+    }
+    return false;
+}
+
+bool tpm_pin_mark_keyring_stale(uid_t uid, const tpm_pin_config_t *cfg) {
+    tpm_pin_config_t local_cfg;
+    if (!cfg) {
+        tpm_pin_config_load(NULL, &local_cfg);
+        cfg = &local_cfg;
+    }
+
+    bool pcr7_bound = false;
+    bool keyring_saved = false;
+    if (!tpm_pin_get_user_enrollment_flags(uid, cfg, &pcr7_bound, &keyring_saved) || !keyring_saved) {
+        return false;
+    }
+
+    bool sys_dir = is_system_data_dir(cfg);
+    char dir_path[512];
+    get_user_dir_path(uid, cfg, dir_path, sizeof(dir_path));
+
+    int dir_dfd = open(dir_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (dir_dfd < 0) return false;
+
+    struct stat dst;
+    if (fstat(dir_dfd, &dst) != 0 || !S_ISDIR(dst.st_mode) ||
+        (dst.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+        close(dir_dfd);
+        return false;
+    }
+    bool owner_ok = sys_dir ? (dst.st_uid == 0) : (dst.st_uid == 0 || dst.st_uid == geteuid());
+    if (!owner_ok) {
+        close(dir_dfd);
+        return false;
+    }
+
+    uint32_t flags = (pcr7_bound ? FLAG_PCR7_BOUND : 0) | FLAG_KEYRING_PWD_STORED;
+    char meta_path[512];
+    get_user_meta_path(uid, cfg, meta_path, sizeof(meta_path));
+    uint32_t existing_flags = 0;
+    if (read_meta_flags(meta_path, sys_dir, &existing_flags)) {
+        flags |= existing_flags;
+    }
+    flags |= FLAG_KEYRING_PWD_STALE;
+
+    char meta_tmp_name[128];
+    snprintf(meta_tmp_name, sizeof(meta_tmp_name), "sealed.meta.tmp.%d", (int)getpid());
+    unlinkat(dir_dfd, meta_tmp_name, 0);
+
+    int mfd = openat(dir_dfd, meta_tmp_name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (mfd < 0) {
+        close(dir_dfd);
+        return false;
+    }
+
+    tpm_sealed_meta_t meta;
+    meta.magic = TPM_PIN_MAGIC;
+    meta.version = TPM_PIN_VERSION;
+    meta.flags = flags;
+
+    bool ok = false;
+    if (write(mfd, &meta, sizeof(meta)) == (ssize_t)sizeof(meta) &&
+        fchmod(mfd, 0644) == 0 && fsync(mfd) == 0) {
+        close(mfd);
+        if (renameat(dir_dfd, meta_tmp_name, dir_dfd, "sealed.meta") == 0) {
+            ok = true;
+        } else {
+            unlinkat(dir_dfd, meta_tmp_name, 0);
+        }
+    } else {
+        close(mfd);
+        unlinkat(dir_dfd, meta_tmp_name, 0);
+    }
+
+    (void)fsync(dir_dfd);
+    close(dir_dfd);
+    return ok;
+}
+
+bool tpm_pin_sync_keyring_password(uid_t uid, const char *pin, const char *new_password,
+                                   const tpm_pin_config_t *cfg, int *tpm_status_code) {
+    if (tpm_status_code) *tpm_status_code = 0;
+    if (!pin || pin[0] == '\0' || !new_password || new_password[0] == '\0') return false;
+
+    size_t pin_len = strlen(pin);
+    if (pin_len > TPM_PIN_MAX_PIN_LEN) return false;
+    for (size_t i = 0; i < pin_len; i++) {
+        if (iscntrl((unsigned char)pin[i])) return false;
+    }
+
+    if (strlen(new_password) >= TPM_PIN_MAX_PASSWORD_LEN) {
+        return false;
+    }
+
+    tpm_pin_config_t local_cfg;
+    if (!cfg) {
+        tpm_pin_config_load(NULL, &local_cfg);
+        cfg = &local_cfg;
+    }
+
+    if (!cfg->enable_keyring_unlock) {
+        return false;
+    }
+    if (!tpm_pin_user_is_enrolled(uid, cfg)) {
+        return false;
+    }
+
+    tpm_pin_config_t relaxed_cfg = *cfg;
+    relaxed_cfg.digits_only = false;
+    relaxed_cfg.min_length = 1;
+    relaxed_cfg.max_length = TPM_PIN_MAX_PIN_LEN;
+    relaxed_cfg.disallow_simple_pins = false;
+    relaxed_cfg.enable_keyring_unlock = true;
+
+    int tpm_rc = 0;
+    if (!tpm_pin_verify_user(uid, pin, &relaxed_cfg, NULL, 0, &tpm_rc)) {
+        if (tpm_status_code) *tpm_status_code = tpm_rc;
+        return false;
+    }
+
+    return tpm_pin_enroll_user(uid, pin, new_password, &relaxed_cfg);
 }
 
 bool tpm_pin_get_user_status(uid_t uid, const tpm_pin_config_t *cfg, tpm_pin_status_t *status) {
     if (!status) return false;
     memset(status, 0, sizeof(*status));
+    status->secure_boot_state = tpm_engine_detect_secure_boot();
 
     tpm_pin_config_t local_cfg;
     if (!cfg) {
@@ -856,6 +1005,8 @@ bool tpm_pin_get_user_status(uid_t uid, const tpm_pin_config_t *cfg, tpm_pin_sta
 
     status->is_enrolled = tpm_pin_get_user_enrollment_flags(
         uid, cfg, &status->pcr7_bound, &status->keyring_pwd_saved);
+    status->keyring_pwd_stale = status->is_enrolled && status->keyring_pwd_saved &&
+                                tpm_pin_is_keyring_stale(uid, cfg);
 
     ESYS_CONTEXT *esys = NULL;
     TSS2_RC rc = tpm_engine_init(cfg->tcti_name, &esys);

@@ -224,6 +224,7 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
 
     bool likely_pin = tpm_pin_is_likely_pin(input, &cfg);
     bool pin_success = false;
+    bool used_helper = false;
     if (likely_pin) {
         bool use_helper = (is_unpriv &&
                            target_uid == getuid() &&
@@ -232,6 +233,7 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
                            secure_getenv("TCTI") == NULL);
 
         if (use_helper) {
+            used_helper = true;
             pin_success = verify_via_setuid_helper(username, input, &tpm_rc);
         } else {
             /* Never unseal keyring password into an unprivileged caller's address space */
@@ -249,6 +251,13 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
     }
 
     if (pin_success) {
+        pam_syslog(pamh, LOG_NOTICE,
+                   "TPM PIN authentication succeeded for uid=%u (service=%s, helper=%s, keyring=%s)",
+                   (unsigned int)target_uid,
+                   service ? service : "unknown",
+                   used_helper ? "yes" : "no",
+                   (strlen(unsealed_pwd) > 0) ? "unsealed" : "none");
+
         /* Successfully authenticated with hardware TPM PIN */
         if (strlen(unsealed_pwd) > 0) {
             /* Pass unsealed system password to PAM_AUTHTOK so GNOME Keyring / KWallet unlock automatically */
@@ -279,6 +288,22 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
      */
     if (!likely_pin || !cfg.digits_only) {
         pam_set_item(pamh, PAM_AUTHTOK, input);
+    }
+
+    if (likely_pin) {
+        if (tpm_pin_rc_is_lockout((uint32_t)tpm_rc)) {
+            pam_syslog(pamh, LOG_WARNING,
+                       "TPM DA lockout active for uid=%u (service=%s); falling back to password",
+                       (unsigned int)target_uid, service ? service : "unknown");
+        } else if (tpm_pin_rc_is_policy_fail((uint32_t)tpm_rc)) {
+            pam_syslog(pamh, LOG_WARNING,
+                       "Secure Boot (PCR 7) policy mismatch for uid=%u (service=%s); falling back to password",
+                       (unsigned int)target_uid, service ? service : "unknown");
+        } else if (!used_helper) {
+            pam_syslog(pamh, LOG_NOTICE,
+                       "TPM PIN verification failed for uid=%u (service=%s, tpm_rc=0x%x); falling back to password",
+                       (unsigned int)target_uid, service ? service : "unknown", (unsigned int)tpm_rc);
+        }
     }
 
     if (!(flags & PAM_SILENT)) {
@@ -329,9 +354,41 @@ int pam_sm_close_session(pam_handle_t *pamh, int flags, int argc, const char **a
 }
 
 int pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    (void)pamh;
-    (void)flags;
     (void)argc;
     (void)argv;
+
+    if (!(flags & PAM_UPDATE_AUTHTOK) || geteuid() != 0) {
+        return PAM_IGNORE;
+    }
+
+    const char *username = NULL;
+    if (pam_get_user(pamh, &username, NULL) != PAM_SUCCESS || !username) {
+        return PAM_IGNORE;
+    }
+
+    uid_t target_uid = 0;
+    if (!lookup_uid_by_name(username, &target_uid)) {
+        return PAM_IGNORE;
+    }
+
+    tpm_pin_config_t cfg;
+    tpm_pin_config_load(NULL, &cfg);
+
+    bool pcr7_bound = false;
+    bool keyring_saved = false;
+    if (!tpm_pin_get_user_enrollment_flags(target_uid, &cfg, &pcr7_bound, &keyring_saved) ||
+        !keyring_saved) {
+        return PAM_IGNORE;
+    }
+
+    if (tpm_pin_mark_keyring_stale(target_uid, &cfg)) {
+        pam_syslog(pamh, LOG_NOTICE,
+                   "Login password updated for uid=%u; sealed TPM keyring password marked stale",
+                   (unsigned int)target_uid);
+        if (!(flags & PAM_SILENT)) {
+            pam_info(pamh, "Secure PIN: Login password changed. Run 'sudo tpm-pin-ctl sync-keyring' (or open Secure PIN Settings) to update keyring auto-unlock.");
+        }
+    }
+
     return PAM_IGNORE;
 }

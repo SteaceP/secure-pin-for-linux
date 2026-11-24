@@ -5,7 +5,7 @@ _tpm_pin_ctl_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local cmds="status enroll change-pin verify remove list doctor pam da-reset da-config config version help"
+    local cmds="status enroll change-pin sync-keyring verify remove list doctor pam da-reset da-config config version help"
     local config_keys="digits_only min_length max_length disallow_simple_pins enable_login enable_lockscreen enable_sudo enable_polkit enable_keyring_unlock bind_pcr7 da_max_tries da_recovery_time da_lockout_recovery tcti_name data_dir"
     local bool_keys="digits_only disallow_simple_pins enable_login enable_lockscreen enable_sudo enable_polkit enable_keyring_unlock bind_pcr7"
 
@@ -25,7 +25,7 @@ _tpm_pin_ctl_completions() {
             COMPREPLY=( $(compgen -W "--json --user" -- "$cur") )
             return 0
             ;;
-        enroll|change-pin)
+        enroll|change-pin|sync-keyring)
             COMPREPLY=( $(compgen -W "--user --pin --password" -- "$cur") )
             return 0
             ;;

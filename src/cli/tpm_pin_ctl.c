@@ -233,6 +233,7 @@ static void print_usage(const char *prog) {
     printf("  %s status [--json] [--user <username>]\n", prog);
     printf("  %s enroll [--user <username>]\n", prog);
     printf("  %s change-pin [--user <username>]\n", prog);
+    printf("  %s sync-keyring [--user <username>]\n", prog);
     printf("  %s verify [--user <username>]\n", prog);
     printf("  %s remove [--user <username>]\n", prog);
     printf("  %s list [--json]\n", prog);
@@ -408,6 +409,12 @@ int main(int argc, char **argv) {
             printf("  \"failed_tries\": %u,\n", status.failed_tries);
             printf("  \"max_tries\": %u,\n", status.max_tries);
             printf("  \"keyring_pwd_saved\": %s,\n", status.keyring_pwd_saved ? "true" : "false");
+            printf("  \"keyring_pwd_stale\": %s,\n", status.keyring_pwd_stale ? "true" : "false");
+            printf("  \"owner_auth_set\": %s,\n", status.owner_auth_set ? "true" : "false");
+            printf("  \"lockout_auth_set\": %s,\n", status.lockout_auth_set ? "true" : "false");
+            printf("  \"secure_boot_state\": %d,\n", status.secure_boot_state);
+            printf("  \"pcr7_checked\": %s,\n", status.pcr7_checked ? "true" : "false");
+            printf("  \"pcr7_populated\": %s,\n", status.pcr7_populated ? "true" : "false");
             printf("  \"pam_enabled\": %s,\n", pam_active ? "true" : "false");
             printf("  \"distro\": ");
             print_json_escaped(pam_manager_distro_name(distro));
@@ -438,8 +445,20 @@ int main(int argc, char **argv) {
             printf("Bus Protection:         %s\n", status.bus_encryption[0] ? status.bus_encryption : "Active");
             printf("Target User:            %s (UID: %u)\n", username ? username : "unknown", (unsigned int)uid);
             printf("PIN Enrolled:           %s\n", status.is_enrolled ? "Yes" : "No");
-            printf("Keyring Auto-Unlock:    %s\n", status.keyring_pwd_saved ? "Configured" : "None");
-            printf("Secure Boot PCR 7:      %s\n", status.pcr7_bound ? "Bound" : "Not bound");
+            const char *kr_str = "None";
+            if (status.keyring_pwd_saved) {
+                kr_str = status.keyring_pwd_stale
+                         ? "Configured (STALE — run: sudo tpm-pin-ctl sync-keyring)"
+                         : "Configured";
+            }
+            const char *sb_str = (status.secure_boot_state == 1) ? "Enabled"
+                               : (status.secure_boot_state == 0) ? "Disabled"
+                               : "Unavailable (non-UEFI or restricted)";
+            printf("Keyring Auto-Unlock:    %s\n", kr_str);
+            printf("Secure Boot PCR 7:      %s (UEFI Secure Boot: %s%s)\n",
+                   status.pcr7_bound ? "Bound" : "Not bound",
+                   sb_str,
+                   status.pcr7_checked ? (status.pcr7_populated ? ", PCR 7 populated" : ", PCR 7 empty") : "");
             printf("PAM Integration:        %s (Detected Distro: %s)\n",
                    pam_active ? "Active" : "Inactive (Run: sudo tpm-pin-ctl pam enable)",
                    pam_manager_distro_name(distro));
@@ -459,6 +478,11 @@ int main(int argc, char **argv) {
                 printf("TPM Hardware DA State:  %s (%u / %u failed tries)\n",
                        status.is_locked_out ? "LOCKED OUT" : "Ready",
                        status.failed_tries, status.max_tries);
+                if (status.owner_auth_set || status.lockout_auth_set) {
+                    printf("TPM Hierarchy Auth:     owner=%s, lockout=%s\n",
+                           status.owner_auth_set ? "SET" : "clear",
+                           status.lockout_auth_set ? "SET" : "clear");
+                }
             }
         }
         exit_code = 0;
@@ -480,6 +504,11 @@ int main(int argc, char **argv) {
             if (!status.tpm_accessible) {
                 fprintf(stderr, "Error: TPM 2.0 device is present, but permission was denied (/dev/tpmrm0).\n");
                 fprintf(stderr, "Run with sudo/pkexec to access the TPM device.\n");
+                goto cleanup;
+            }
+            if (status.owner_auth_set) {
+                fprintf(stderr, "Error: TPM Owner hierarchy has an authorization password set (ownerAuthSet).\n");
+                fprintf(stderr, "Clear TPM ownership or reset ownerAuth to empty before enrolling a PIN.\n");
                 goto cleanup;
             }
         }
@@ -663,6 +692,106 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Error: Failed to verify current PIN or re-seal (TPM code: 0x%x).\n", tpm_rc);
         } else {
             fprintf(stderr, "Error: Current PIN is invalid or does not match policy format.\n");
+        }
+        goto cleanup;
+    }
+
+    if (strcmp(action, "sync-keyring") == 0) {
+        if (geteuid() != 0) {
+            fprintf(stderr, "Error: Root privileges required. Run with sudo or pkexec.\n");
+            goto cleanup;
+        }
+        if (!cfg.enable_keyring_unlock) {
+            fprintf(stderr, "Error: Keyring auto-unlock is currently disabled in configuration.\n");
+            goto cleanup;
+        }
+        tpm_pin_status_t status;
+        if (tpm_pin_get_user_status(uid, &cfg, &status)) {
+            if (!status.tpm_present) {
+                fprintf(stderr, "Error: TPM 2.0 device was not detected on this system.\n");
+                goto cleanup;
+            }
+            if (!status.tpm_accessible) {
+                fprintf(stderr, "Error: TPM 2.0 device is present, but permission was denied (/dev/tpmrm0).\n");
+                goto cleanup;
+            }
+            if (status.owner_auth_set) {
+                fprintf(stderr, "Error: TPM Owner hierarchy has an authorization password set (ownerAuthSet).\n");
+                goto cleanup;
+            }
+        }
+        if (!tpm_pin_user_is_enrolled(uid, &cfg)) {
+            fprintf(stderr, "Error: No enrolled PIN found for user %s. Run 'enroll' first.\n",
+                    username ? username : "unknown");
+            goto cleanup;
+        }
+
+        char *pin = opt_pin_buf ? strdup(opt_pin_buf) : read_secret("Enter current PIN: ");
+        if (!pin || pin[0] == '\0') {
+            fprintf(stderr, "Error: Current PIN is required.\n");
+            if (pin) { tpm_pin_zero(pin, strlen(pin)); free(pin); }
+            goto cleanup;
+        }
+
+        char *pwd = NULL;
+        if (opt_pwd_buf) {
+            pwd = strdup(opt_pwd_buf);
+        } else {
+            pwd = read_secret("Enter current login password: ");
+            if (pwd && pwd[0] != '\0') {
+                char *confirm_pwd = read_secret("Confirm current login password: ");
+                if (!confirm_pwd || strcmp(pwd, confirm_pwd) != 0) {
+                    fprintf(stderr, "Error: Login passwords do not match.\n");
+                    tpm_pin_zero(pin, strlen(pin)); free(pin);
+                    tpm_pin_zero(pwd, strlen(pwd)); free(pwd);
+                    if (confirm_pwd) { tpm_pin_zero(confirm_pwd, strlen(confirm_pwd)); free(confirm_pwd); }
+                    goto cleanup;
+                }
+                tpm_pin_zero(confirm_pwd, strlen(confirm_pwd));
+                free(confirm_pwd);
+            }
+        }
+
+        if (!pwd || pwd[0] == '\0') {
+            fprintf(stderr, "Error: Current login password is required to sync keyring auto-unlock.\n");
+            tpm_pin_zero(pin, strlen(pin)); free(pin);
+            if (pwd) { tpm_pin_zero(pwd, strlen(pwd)); free(pwd); }
+            goto cleanup;
+        }
+
+        if (username) {
+            int pw_res = tpm_pin_verify_system_password(username, pwd);
+            if (pw_res == 0) {
+                fprintf(stderr, "Error: Current login password is incorrect.\n");
+                tpm_pin_zero(pin, strlen(pin)); free(pin);
+                tpm_pin_zero(pwd, strlen(pwd)); free(pwd);
+                goto cleanup;
+            } else if (pw_res < 0) {
+                fprintf(stderr, "Note: Local shadow hash unavailable for user '%s'; skipping local login password check.\n",
+                        username);
+            }
+        }
+
+        printf("Verifying PIN and re-sealing login password in TPM 2.0...\n");
+        int tpm_rc = 0;
+        bool ok = tpm_pin_sync_keyring_password(uid, pin, pwd, &cfg, &tpm_rc);
+
+        tpm_pin_zero(pin, strlen(pin));
+        free(pin);
+        tpm_pin_zero(pwd, strlen(pwd));
+        free(pwd);
+
+        if (ok) {
+            printf("Success: Sealed keyring password updated and synced in TPM 2.0!\n");
+            exit_code = 0;
+        } else if (tpm_pin_rc_is_lockout((uint32_t)tpm_rc)) {
+            fprintf(stderr, "Error: TPM Dictionary Attack lockout is active. Reset lockout or wait for cooldown.\n");
+        } else if (tpm_pin_rc_is_policy_fail((uint32_t)tpm_rc)) {
+            fprintf(stderr, "Error: Secure Boot (PCR 7) state changed. Re-enroll your PIN using 'enroll'.\n");
+        } else if (tpm_rc != 0) {
+            fprintf(stderr, "Error: Failed to verify current PIN or re-seal keyring password (TPM code: 0x%x).\n", tpm_rc);
+        } else {
+            fprintf(stderr, "Error: Current PIN is invalid or password length exceeds limit.\n");
         }
         goto cleanup;
     }
@@ -972,6 +1101,9 @@ int main(int argc, char **argv) {
             diag_add(checks, &nchecks, cap, "enrollment_sync", "PIN Enrollment & Config Sync", "info",
                      "User '%s' (UID %u) has no PIN enrolled.",
                      username ? username : "unknown", (unsigned int)uid);
+        } else if (status.keyring_pwd_stale) {
+            diag_add(checks, &nchecks, cap, "enrollment_sync", "PIN Enrollment & Config Sync", "warn",
+                     "Sealed keyring password is out of sync after a login password change. Run 'sudo tpm-pin-ctl sync-keyring'.");
         } else if (cfg.bind_pcr7 != status.pcr7_bound) {
             diag_add(checks, &nchecks, cap, "enrollment_sync", "PIN Enrollment & Config Sync", "warn",
                      "Config bind_pcr7=%s differs from sealed blob (%s). Run 'change-pin' to re-seal.",
@@ -986,6 +1118,43 @@ int main(int argc, char **argv) {
                      username ? username : "unknown",
                      status.pcr7_bound ? "bound" : "off",
                      status.keyring_pwd_saved ? "saved" : "none");
+        }
+
+        /* 9. UEFI Secure Boot & PCR 7 integrity */
+        bool pcr7_active = cfg.bind_pcr7 || status.pcr7_bound;
+        if (status.secure_boot_state == 1) {
+            if (status.pcr7_checked && !status.pcr7_populated) {
+                diag_add(checks, &nchecks, cap, "secure_boot_pcr7", "UEFI Secure Boot & PCR 7", "warn",
+                         "UEFI Secure Boot is enabled, but SHA-256 PCR 7 currently reads all zeroes.");
+            } else {
+                diag_add(checks, &nchecks, cap, "secure_boot_pcr7", "UEFI Secure Boot & PCR 7", "pass",
+                         "UEFI Secure Boot is enabled%s.",
+                         status.pcr7_checked ? " and PCR 7 is populated" : "");
+            }
+        } else if (status.secure_boot_state == 0) {
+            diag_add(checks, &nchecks, cap, "secure_boot_pcr7", "UEFI Secure Boot & PCR 7",
+                     pcr7_active ? "warn" : "info",
+                     "UEFI Secure Boot is disabled; PCR 7 binding does not verify signed boot chain.");
+        } else {
+            diag_add(checks, &nchecks, cap, "secure_boot_pcr7", "UEFI Secure Boot & PCR 7",
+                     pcr7_active ? "warn" : "info",
+                     "UEFI Secure Boot state unavailable (non-UEFI boot or restricted efivars).");
+        }
+
+        /* 10. TPM hierarchy auth status */
+        if (status.tpm_present && status.tpm_accessible) {
+            if (status.owner_auth_set || status.lockout_auth_set) {
+                diag_add(checks, &nchecks, cap, "tpm_hierarchy_auth", "TPM Hierarchy Authorization", "warn",
+                         "TPM hierarchy auth is set (owner=%s, lockout=%s); non-empty passwords may block enrollment or DA reset.",
+                         status.owner_auth_set ? "set" : "clear",
+                         status.lockout_auth_set ? "set" : "clear");
+            } else {
+                diag_add(checks, &nchecks, cap, "tpm_hierarchy_auth", "TPM Hierarchy Authorization", "pass",
+                         "TPM Owner and Lockout hierarchies use empty authorization as expected.");
+            }
+        } else if (status.tpm_present) {
+            diag_add(checks, &nchecks, cap, "tpm_hierarchy_auth", "TPM Hierarchy Authorization", "info",
+                     "Run diagnostics as administrator to check TPM hierarchy authorization flags.");
         }
 
         /* 9. Keyring PAM module availability */
@@ -1161,7 +1330,12 @@ int main(int argc, char **argv) {
                 goto cleanup;
             }
         }
-        fprintf(stderr, "Failed to reset TPM lockout counter (RC: 0x%x). Requires root / lockout authorization.\n", rc);
+        if (tpm_pin_rc_is_bad_auth((uint32_t)rc) ||
+            (((rc & 0x80U) != 0U) && ((rc & 0xBFU) == (TPM2_RC_AUTH_FAIL & 0xBFU)))) {
+            fprintf(stderr, "Failed to reset TPM lockout counter (RC: 0x%x): TPM Lockout hierarchy has a password set (lockoutAuthSet).\n", rc);
+        } else {
+            fprintf(stderr, "Failed to reset TPM lockout counter (RC: 0x%x). Requires root / lockout authorization.\n", rc);
+        }
         goto cleanup;
     }
 
@@ -1212,7 +1386,12 @@ int main(int argc, char **argv) {
                 goto cleanup;
             }
         }
-        fprintf(stderr, "Failed to configure TPM DA protection (RC: 0x%x). Requires root / lockout authorization.\n", rc);
+        if (tpm_pin_rc_is_bad_auth((uint32_t)rc) ||
+            (((rc & 0x80U) != 0U) && ((rc & 0xBFU) == (TPM2_RC_AUTH_FAIL & 0xBFU)))) {
+            fprintf(stderr, "Failed to configure TPM DA protection (RC: 0x%x): TPM Lockout hierarchy has a password set (lockoutAuthSet).\n", rc);
+        } else {
+            fprintf(stderr, "Failed to configure TPM DA protection (RC: 0x%x). Requires root / lockout authorization.\n", rc);
+        }
         goto cleanup;
     }
 

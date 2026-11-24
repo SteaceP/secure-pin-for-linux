@@ -170,6 +170,16 @@ TSS2_RC Esys_PolicyGetDigest(
     ESYS_TR shandle3,
     TPM2B_DIGEST **policyDigest);
 
+TSS2_RC Esys_PCR_Read(
+    ESYS_CONTEXT *esysContext,
+    ESYS_TR shandle1,
+    ESYS_TR shandle2,
+    ESYS_TR shandle3,
+    const TPML_PCR_SELECTION *pcrSelectionIn,
+    UINT32 *pcrUpdateCounter,
+    TPML_PCR_SELECTION **pcrSelectionOut,
+    TPML_DIGEST **pcrValues);
+
 TSS2_RC Esys_FlushContext(
     ESYS_CONTEXT *esysContext,
     ESYS_TR flushHandle);

@@ -1029,6 +1029,268 @@ static bool test_tpm_change_pin_and_list(void) {
     return true;
 }
 
+static bool test_opensuse_and_password_hook(void) {
+    char osrel_path[256];
+    char common_auth_path[256];
+    char common_pwd_path[256];
+    char common_pwd_link[256];
+    char fedora_pwd_path[256];
+    int pid = (int)getpid();
+
+    snprintf(osrel_path, sizeof(osrel_path), "/tmp/test_os_release_suse_%d", pid);
+    snprintf(common_auth_path, sizeof(common_auth_path), "/tmp/test_common_auth_suse_%d", pid);
+    snprintf(common_pwd_path, sizeof(common_pwd_path), "/tmp/test_common_pwd_suse_%d", pid);
+    snprintf(common_pwd_link, sizeof(common_pwd_link), "/tmp/test_common_pwd_link_suse_%d", pid);
+    snprintf(fedora_pwd_path, sizeof(fedora_pwd_path), "/tmp/test_fedora_pwd_%d", pid);
+
+    const char *suse_osrel =
+        "NAME=\"openSUSE Tumbleweed\"\n"
+        "ID=\"opensuse-tumbleweed\"\n"
+        "ID_LIKE=\"opensuse suse\"\n";
+    if (!write_whole_file(osrel_path, suse_osrel)) return false;
+    linux_distro_t d = pam_manager_detect_distro_from_file(osrel_path);
+    unlink(osrel_path);
+    if (d != DISTRO_OPENSUSE) return false;
+    if (strcmp(pam_manager_distro_name(d), "openSUSE") != 0) return false;
+
+    const char *suse_common_auth =
+        "#%PAM-1.0\n"
+        "auth\trequired\tpam_env.so\n"
+        "auth\trequired\tpam_unix.so\ttry_first_pass\n";
+    if (!write_whole_file(common_auth_path, suse_common_auth)) return false;
+    if (!pam_manager_apply_auth_file(common_auth_path)) {
+        unlink(common_auth_path);
+        return false;
+    }
+    char updated[4096];
+    if (!read_whole_file(common_auth_path, updated, sizeof(updated)) ||
+        !strstr(updated, "pam_tpm_pin.so") ||
+        !pam_manager_remove_from_file(common_auth_path) ||
+        !read_whole_file(common_auth_path, updated, sizeof(updated)) ||
+        strcmp(updated, suse_common_auth) != 0) {
+        unlink(common_auth_path);
+        return false;
+    }
+    unlink(common_auth_path);
+
+    /* Debian/openSUSE common-password with relative jump + symlink preservation */
+    const char *common_pwd =
+        "#%PAM-1.0\n"
+        "password\t[success=1 default=ignore]\tpam_unix.so obscure yescrypt\n"
+        "password\trequisite\t\t\tpam_deny.so\n"
+        "password\trequired\t\t\tpam_permit.so\n";
+    if (!write_whole_file(common_pwd_path, common_pwd)) return false;
+    unlink(common_pwd_link);
+    if (symlink(common_pwd_path, common_pwd_link) != 0) {
+        unlink(common_pwd_path);
+        return false;
+    }
+    if (!pam_manager_configure_password_hook(common_pwd_link, true) ||
+        !pam_manager_configure_password_hook(common_pwd_link, true)) {
+        unlink(common_pwd_link);
+        unlink(common_pwd_path);
+        return false;
+    }
+    struct stat st;
+    if (lstat(common_pwd_link, &st) != 0 || !S_ISLNK(st.st_mode) ||
+        !read_whole_file(common_pwd_path, updated, sizeof(updated))) {
+        unlink(common_pwd_link);
+        unlink(common_pwd_path);
+        return false;
+    }
+    const char *hook_pos = strstr(updated, "-password\toptional\tpam_tpm_pin.so");
+    const char *permit_pos = strstr(updated, "pam_permit.so");
+    if (!hook_pos || !permit_pos || !(permit_pos < hook_pos)) {
+        unlink(common_pwd_link);
+        unlink(common_pwd_path);
+        return false;
+    }
+    /* Exactly 1 occurrence after idempotent call */
+    if (strstr(hook_pos + strlen("-password\toptional\tpam_tpm_pin.so"), "pam_tpm_pin.so")) {
+        unlink(common_pwd_link);
+        unlink(common_pwd_path);
+        return false;
+    }
+    if (!pam_manager_remove_from_file(common_pwd_link) ||
+        !read_whole_file(common_pwd_path, updated, sizeof(updated)) ||
+        strcmp(updated, common_pwd) != 0) {
+        unlink(common_pwd_link);
+        unlink(common_pwd_path);
+        return false;
+    }
+    unlink(common_pwd_link);
+    unlink(common_pwd_path);
+
+    /* Fedora sufficient pam_unix.so password stack must insert BEFORE sufficient line */
+    const char *fedora_pwd =
+        "password    requisite   pam_pwquality.so local_users_only\n"
+        "password    sufficient  pam_unix.so yescrypt shadow nullok\n"
+        "password    required    pam_deny.so\n";
+    if (!write_whole_file(fedora_pwd_path, fedora_pwd)) return false;
+    if (!pam_manager_configure_password_hook(fedora_pwd_path, true) ||
+        !read_whole_file(fedora_pwd_path, updated, sizeof(updated))) {
+        unlink(fedora_pwd_path);
+        return false;
+    }
+    const char *pwq_pos = strstr(updated, "pam_pwquality.so");
+    hook_pos = strstr(updated, "-password\toptional\tpam_tpm_pin.so");
+    const char *unix_pos = strstr(updated, "pam_unix.so");
+    if (!pwq_pos || !hook_pos || !unix_pos || !(pwq_pos < hook_pos && hook_pos < unix_pos)) {
+        unlink(fedora_pwd_path);
+        return false;
+    }
+    if (!pam_manager_configure_password_hook(fedora_pwd_path, false) ||
+        !read_whole_file(fedora_pwd_path, updated, sizeof(updated)) ||
+        strcmp(updated, fedora_pwd) != 0) {
+        unlink(fedora_pwd_path);
+        return false;
+    }
+    unlink(fedora_pwd_path);
+    return true;
+}
+
+static bool test_secure_boot_and_rc_helpers(void) {
+    char efivar_path[256];
+    snprintf(efivar_path, sizeof(efivar_path), "/tmp/test_efivar_sb_%d", (int)getpid());
+
+    const uint8_t sb_on[5] = { 0x06, 0x00, 0x00, 0x00, 0x01 };
+    const uint8_t sb_off[5] = { 0x06, 0x00, 0x00, 0x00, 0x00 };
+    const uint8_t sb_short[3] = { 0x06, 0x00, 0x00 };
+
+    FILE *f = fopen(efivar_path, "wb");
+    if (!f) return false;
+    fwrite(sb_on, 1, sizeof(sb_on), f);
+    fclose(f);
+    if (tpm_engine_detect_secure_boot_from_file(efivar_path) != 1) {
+        unlink(efivar_path);
+        return false;
+    }
+
+    f = fopen(efivar_path, "wb");
+    if (!f) { unlink(efivar_path); return false; }
+    fwrite(sb_off, 1, sizeof(sb_off), f);
+    fclose(f);
+    if (tpm_engine_detect_secure_boot_from_file(efivar_path) != 0) {
+        unlink(efivar_path);
+        return false;
+    }
+
+    f = fopen(efivar_path, "wb");
+    if (!f) { unlink(efivar_path); return false; }
+    fwrite(sb_short, 1, sizeof(sb_short), f);
+    fclose(f);
+    if (tpm_engine_detect_secure_boot_from_file(efivar_path) != -1) {
+        unlink(efivar_path);
+        return false;
+    }
+    unlink(efivar_path);
+    if (tpm_engine_detect_secure_boot_from_file(efivar_path) != -1) return false;
+
+    /* Transient RCs */
+    if (!tpm_pin_rc_is_transient(0x922) || !tpm_pin_rc_is_transient(0x90a) || !tpm_pin_rc_is_transient(0x908)) {
+        return false;
+    }
+    if (tpm_pin_rc_is_transient(0x98e) || tpm_pin_rc_is_transient(0x921) || tpm_pin_rc_is_transient(0x000)) {
+        return false;
+    }
+
+    /* Format-1 BAD_AUTH vs non-Format-1 */
+    if (!tpm_pin_rc_is_bad_auth(0x0a2) || !tpm_pin_rc_is_bad_auth(0x1a2) || !tpm_pin_rc_is_bad_auth(0x9a2)) {
+        return false;
+    }
+    if (tpm_pin_rc_is_bad_auth(0x922) || tpm_pin_rc_is_bad_auth(0x022) || tpm_pin_rc_is_bad_auth(0x98e)) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool test_tpm_stale_and_sync_keyring(void) {
+    tpm_pin_config_t cfg;
+    tpm_pin_config_defaults(&cfg);
+
+    const char *tcti_env = getenv("TCTI");
+    if (tcti_env) {
+        snprintf(cfg.tcti_name, sizeof(cfg.tcti_name), "%s", tcti_env);
+    }
+    snprintf(cfg.data_dir, sizeof(cfg.data_dir), "/tmp/test_tpm_sync_%d", (int)getpid());
+
+    uid_t uid = 9993;
+    tpm_pin_remove_user(uid, &cfg);
+
+    if (!tpm_pin_enroll_user(uid, "4829", "OldPwd!", &cfg)) {
+        if (tcti_env || access("/dev/tpmrm0", R_OK | W_OK) == 0) {
+            return false;
+        }
+        return true;
+    }
+
+    if (tpm_pin_is_keyring_stale(uid, &cfg)) {
+        tpm_pin_remove_user(uid, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    if (!tpm_pin_mark_keyring_stale(uid, &cfg) || !tpm_pin_is_keyring_stale(uid, &cfg)) {
+        tpm_pin_remove_user(uid, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    /* Status must reflect stale keyring without touching sealed.blob AAD */
+    tpm_pin_status_t st;
+    if (!tpm_pin_get_user_status(uid, &cfg, &st) || !st.keyring_pwd_saved || !st.keyring_pwd_stale) {
+        tpm_pin_remove_user(uid, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    char unsealed[TPM_PIN_MAX_PASSWORD_LEN] = {0};
+    int tpm_rc = 0;
+    if (!tpm_pin_verify_user(uid, "4829", &cfg, unsealed, sizeof(unsealed), &tpm_rc) ||
+        strcmp(unsealed, "OldPwd!") != 0) {
+        tpm_pin_remove_user(uid, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    /* Rotating PIN without overriding password preserves stale flag */
+    if (!tpm_pin_change_pin(uid, "4829", "6194", NULL, &cfg, &tpm_rc) ||
+        !tpm_pin_is_keyring_stale(uid, &cfg)) {
+        tpm_pin_remove_user(uid, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    /* Syncing keyring password works even when min_length tightened to 6, and clears stale flag */
+    cfg.min_length = 6;
+    if (!tpm_pin_sync_keyring_password(uid, "6194", "NewPwd2!", &cfg, &tpm_rc) ||
+        tpm_pin_is_keyring_stale(uid, &cfg)) {
+        tpm_pin_remove_user(uid, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    tpm_pin_config_t verify_cfg = cfg;
+    verify_cfg.min_length = 4;
+    if (!tpm_pin_verify_user(uid, "6194", &verify_cfg, unsealed, sizeof(unsealed), &tpm_rc) ||
+        strcmp(unsealed, "NewPwd2!") != 0) {
+        tpm_pin_remove_user(uid, &cfg);
+        rmdir(cfg.data_dir);
+        return false;
+    }
+
+    ESYS_CONTEXT *esys = NULL;
+    if (tpm_engine_init(cfg.tcti_name, &esys) == TSS2_RC_SUCCESS && esys) {
+        (void)tpm_engine_reset_da_lockout(esys);
+        tpm_engine_destroy(&esys);
+    }
+
+    tpm_pin_remove_user(uid, &cfg);
+    rmdir(cfg.data_dir);
+    return true;
+}
+
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -1038,12 +1300,15 @@ int main(int argc, char **argv) {
     RUN_TEST("PIN Policy Validation", test_policy_validation);
     RUN_TEST("Arch PAM Stack & Keyring Management", test_arch_distro_and_pam_stack);
     RUN_TEST("Fedora/Bazzite PAM Stack & Symlink Preservation", test_fedora_bazzite_distro_and_pam_stack);
+    RUN_TEST("openSUSE PAM Stack & Password Hook Management", test_opensuse_and_password_hook);
     RUN_TEST("Desktop & PAM Service Allowlist", test_pam_service_allowlist);
     RUN_TEST("AES-256-GCM + PBKDF2 Crypto Roundtrip", test_crypto_roundtrip);
     RUN_TEST("Configuration Serialization", test_config_serialization);
     RUN_TEST("Shadow Password Hash Verification", test_shadow_password_verification);
+    RUN_TEST("UEFI Secure Boot & TPM RC Helpers", test_secure_boot_and_rc_helpers);
     RUN_TEST("TPM 2.0 User Enrollment & Unsealing", test_tpm_enroll_and_verify);
     RUN_TEST("TPM 2.0 PIN Rotation & Enrolled User Listing", test_tpm_change_pin_and_list);
+    RUN_TEST("TPM 2.0 Stale Keyring Tracking & Sync", test_tpm_stale_and_sync_keyring);
     RUN_TEST("TPM 2.0 PCR 7 Binding & Authentication", test_tpm_enroll_and_verify_pcr7);
 
     printf("\nTest Summary: %d / %d tests passed.\n", pass_count, test_count);

@@ -1,4 +1,4 @@
-.TH TPM-PIN-CTL 1 "November 2026" "tpm-pin 1.0.9" "User Commands"
+.TH TPM-PIN-CTL 1 "November 2026" "tpm-pin 1.0.10" "User Commands"
 .SH NAME
 tpm-pin-ctl \- manage TPM 2.0 hardware-backed PIN authentication
 .SH SYNOPSIS
@@ -31,6 +31,11 @@ under the TPM-protected master key.
 .B change-pin [\-\-user \fIusername\fP]
 Verify the user's current PIN against the TPM, preserve any previously sealed
 login password, and re-seal a new PIN (requires root).
+.TP
+.B sync-keyring [\-\-user \fIusername\fP]
+Verify the user's current PIN and updated login password (after a password
+change) and re-seal the password into the TPM to restore desktop keyring
+auto-unlock (requires root).
 .TP
 .B verify [\-\-user \fIusername\fP]
 Verify an enrolled PIN against the TPM 2.0 device and report whether any sealed

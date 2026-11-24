@@ -34,6 +34,11 @@
   </provides>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="1.0.10" date="2026-11-24">
+      <description>
+        <p>Release 1.0.10: Reliability, auditing, and multi-distro polish — detects login password changes via pam_sm_chauthtok and provides one-click sync-keyring re-sealing, adds LOG_AUTHPRIV PAM audit logging, retries transient TPM resume errors, reports UEFI Secure Boot and TPM hierarchy authorization state, fixes openSUSE PAM cleanup, and preserves Arch Linux user PAM opt-out across upgrades.</p>
+      </description>
+    </release>
     <release version="1.0.9" date="2026-11-24">
       <description>
         <p>Release 1.0.9: Feature and usability release — adds dedicated PIN rotation (change-pin), in-app PIN verification (Test PIN), hardware Dictionary Attack policy controls in the GUI, an integrated Diagnostics tab and CLI doctor command, local login password verification during enrollment, separate Polkit vs. sudo scopes, weak sequential/repeating PIN checks, live GNOME Shell Quick Settings status, man pages, and shell completions.</p>

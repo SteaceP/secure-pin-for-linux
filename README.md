@@ -113,11 +113,12 @@ Or JSON format (used by the settings GUI):
 
 You will be prompted for your current login password (to seal for desktop keyring auto-unlock) and your new PIN.
 
-### 3. Verify, Change PIN, List Users, and Run Diagnostics
+### 3. Verify, Change PIN, Sync Keyring, List Users, and Run Diagnostics
 
 ```bash
 ./build/tpm-pin-ctl verify
 sudo ./build/tpm-pin-ctl change-pin
+sudo ./build/tpm-pin-ctl sync-keyring
 sudo ./build/tpm-pin-ctl list --json
 ./build/tpm-pin-ctl doctor
 ./build/tpm-pin-ctl config list

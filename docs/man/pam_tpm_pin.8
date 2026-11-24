@@ -1,4 +1,4 @@
-.TH PAM_TPM_PIN 8 "November 2026" "tpm-pin 1.0.9" "System Administration"
+.TH PAM_TPM_PIN 8 "November 2026" "tpm-pin 1.0.10" "System Administration"
 .SH NAME
 pam_tpm_pin \- PAM authentication module for TPM 2.0 PIN login
 .SH SYNOPSIS
@@ -39,8 +39,15 @@ Scope flags (\fBenable_login\fP, \fBenable_lockscreen\fP, \fBenable_sudo\fP,
 Credential blobs bind metadata header fields and target UID into AES-256-GCM
 associated authenticated data (AAD).
 .SH MODULE TYPES PROVIDED
-Only the \fBauth\fP module type is active (\fBpam_sm_authenticate\fP and
-\fBpam_sm_setcred\fP). Account, session, and password hooks return
+.B pam_tpm_pin.so
+provides \fBauth\fP authentication (\fBpam_sm_authenticate\fP,
+\fBpam_sm_setcred\fP) and a passive \fBpassword\fP hook
+(\fBpam_sm_chauthtok\fP on \fBPAM_UPDATE_AUTHTOK\fP) that flags sealed desktop
+keyring credentials as stale when a user changes their login password, without
+ever blocking password changes. All outcomes (success, failure, DA lockout,
+PCR 7 mismatch, and stale-keyring events) are audited via
+.BR pam_syslog (3)
+to \fBLOG_AUTHPRIV\fP without logging secrets. Account and session hooks return
 \fBPAM_IGNORE\fP.
 .SH RETURN VALUES
 .TP

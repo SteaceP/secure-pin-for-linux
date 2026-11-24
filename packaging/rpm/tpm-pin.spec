@@ -1,5 +1,5 @@
 Name:           tpm-pin
-Version:        1.0.9
+Version:        1.0.10
 Release:        1%{?dist}
 Summary:        Windows Hello-style TPM 2.0 PIN authentication for Linux
 
@@ -87,6 +87,12 @@ fi
 %dir %attr(0755,root,root) %{_sysconfdir}/tpm-pin
 
 %changelog
+* Tue Nov 24 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.10-1
+- Track stale sealed keyring passwords via pam_sm_chauthtok and add sync-keyring command and GUI SyncKeyringDialog
+- Add LOG_AUTHPRIV pam_syslog auditing across PAM PIN authentication and password updates
+- Add bounded TPM transient error retries (RETRY/TESTING/YIELDED), UEFI Secure Boot & PCR 7 checks, and hierarchy auth diagnostics
+- Fix openSUSE PAM removal on disable/uninstall and preserve Arch Linux PAM opt-out across package upgrades
+
 * Tue Nov 24 2026 Secure PIN Maintainers <steace@coderage.pro> - 1.0.9-1
 - Add PIN rotation (change-pin), enrolled user listing (list), config listing, --version, and doctor diagnostics
 - Verify local login passwords against shadow hashes before sealing for keyring auto-unlock

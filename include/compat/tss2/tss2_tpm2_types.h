@@ -129,7 +129,11 @@ typedef struct {
 
 /* Return codes */
 #define TPM2_RC_SUCCESS                 0x000
-#define TPM2_RC_LOCKOUT                 0x921
+#define TPM2_RC_WARN                    0x900
+#define TPM2_RC_YIELDED                 (TPM2_RC_WARN + 0x008)
+#define TPM2_RC_TESTING                 (TPM2_RC_WARN + 0x00A)
+#define TPM2_RC_LOCKOUT                 (TPM2_RC_WARN + 0x021)
+#define TPM2_RC_RETRY                   (TPM2_RC_WARN + 0x022)
 #define TPM2_RC_AUTH_FAIL               0x08E
 #define TPM2_RC_BAD_AUTH                0x0A2
 #define TPM2_RC_POLICY_FAIL             0x09D
@@ -157,6 +161,11 @@ typedef struct {
     UINT16 size;
     BYTE   buffer[TPM2_MAX_PRIVATE_BUFFER];
 } TPM2B_PRIVATE;
+
+typedef struct {
+    UINT32 count;
+    TPM2B_DIGEST digests[8];
+} TPML_DIGEST;
 
 typedef struct {
     TPMI_ALG_HASH hash;

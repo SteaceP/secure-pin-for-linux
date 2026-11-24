@@ -24,7 +24,7 @@ extern "C" {
 #define TPM_PIN_MAGIC               0x54504D50  /* "TPMP" */
 #define TPM_PIN_VERSION             2
 #ifndef TPM_PIN_APP_VERSION
-#define TPM_PIN_APP_VERSION         "1.0.9"
+#define TPM_PIN_APP_VERSION         "1.0.10"
 #endif
 
 #define TPM_PIN_SALT_LEN            32
@@ -37,6 +37,7 @@ extern "C" {
 
 #define FLAG_PCR7_BOUND             (1 << 0)
 #define FLAG_KEYRING_PWD_STORED     (1 << 1)
+#define FLAG_KEYRING_PWD_STALE      (1 << 2)
 
 typedef struct {
     bool     digits_only;
@@ -68,6 +69,12 @@ typedef struct {
     uint32_t max_tries;
     bool     pcr7_bound;
     bool     keyring_pwd_saved;
+    bool     keyring_pwd_stale;
+    bool     owner_auth_set;
+    bool     lockout_auth_set;
+    int      secure_boot_state; /* -1 = unknown/non-UEFI, 0 = disabled, 1 = enabled */
+    bool     pcr7_checked;
+    bool     pcr7_populated;
 } tpm_pin_status_t;
 
 typedef struct __attribute__((packed)) {
@@ -126,6 +133,9 @@ void    tpm_engine_destroy(ESYS_CONTEXT **esys_ctx);
 TSS2_RC tpm_engine_get_status(ESYS_CONTEXT *ctx, tpm_pin_status_t *status);
 bool    tpm_engine_sysfs_present(void);
 void    tpm_engine_detect_sysfs_hardware(const char *mfg, const char *vendor_str, tpm_pin_status_t *status);
+int     tpm_engine_detect_secure_boot(void);
+int     tpm_engine_detect_secure_boot_from_file(const char *efivar_path);
+bool    tpm_engine_is_pcr7_populated(ESYS_CONTEXT *ctx, bool *out_populated);
 TSS2_RC tpm_engine_seal_key(ESYS_CONTEXT *ctx,
                            const uint8_t *auth, size_t auth_len,
                            bool bind_pcr7,
@@ -145,6 +155,8 @@ bool tpm_pin_enroll_user(uid_t uid, const char *pin, const char *password, const
 bool tpm_pin_change_pin(uid_t uid, const char *old_pin, const char *new_pin,
                         const char *override_password, const tpm_pin_config_t *cfg,
                         int *tpm_status_code);
+bool tpm_pin_sync_keyring_password(uid_t uid, const char *pin, const char *new_password,
+                                   const tpm_pin_config_t *cfg, int *tpm_status_code);
 bool tpm_pin_verify_user(uid_t uid, const char *pin, const tpm_pin_config_t *cfg,
                          char *unsealed_password, size_t pwd_buf_size,
                          int *tpm_status_code);
@@ -152,6 +164,8 @@ bool tpm_pin_remove_user(uid_t uid, const tpm_pin_config_t *cfg);
 bool tpm_pin_user_is_enrolled(uid_t uid, const tpm_pin_config_t *cfg);
 bool tpm_pin_get_user_enrollment_flags(uid_t uid, const tpm_pin_config_t *cfg,
                                        bool *pcr7_bound, bool *keyring_pwd_saved);
+bool tpm_pin_mark_keyring_stale(uid_t uid, const tpm_pin_config_t *cfg);
+bool tpm_pin_is_keyring_stale(uid_t uid, const tpm_pin_config_t *cfg);
 size_t tpm_pin_list_enrolled_users(const tpm_pin_config_t *cfg, uid_t *uids_out, size_t max_uids);
 bool tpm_pin_get_user_status(uid_t uid, const tpm_pin_config_t *cfg, tpm_pin_status_t *status);
 
@@ -169,6 +183,15 @@ static inline bool tpm_pin_rc_is_policy_fail(uint32_t rc) {
            ((rc & 0xFFFU) == 0x127U);
 }
 
+static inline bool tpm_pin_rc_is_transient(uint32_t rc) {
+    uint32_t code = rc & 0xFFFU;
+    return code == 0x922U || code == 0x90AU || code == 0x908U;
+}
+
+static inline bool tpm_pin_rc_is_bad_auth(uint32_t rc) {
+    return ((rc & 0x80U) != 0U) && ((rc & 0xBFU) == 0xA2U);
+}
+
 /* Distro PAM Configuration Manager */
 linux_distro_t pam_manager_detect_distro(void);
 linux_distro_t pam_manager_detect_distro_from_file(const char *os_release_path);
@@ -181,6 +204,7 @@ bool           pam_manager_apply_auth_file(const char *filepath);
 bool           pam_manager_apply_fedora_file(const char *filepath);
 bool           pam_manager_remove_from_file(const char *filepath);
 bool           pam_manager_configure_arch_keyring_file(const char *filepath, bool enable);
+bool           pam_manager_configure_password_hook(const char *filepath, bool enable);
 
 #ifdef __cplusplus
 }

@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -178,6 +180,15 @@ void tpm_engine_destroy(ESYS_CONTEXT **esys_ctx) {
     }
 }
 
+#define TPM_TRANSIENT_MAX_RETRIES 5
+
+static void tpm_retry_backoff_ms(unsigned int ms) {
+    struct timespec ts;
+    ts.tv_sec = (time_t)(ms / 1000U);
+    ts.tv_nsec = (long)((ms % 1000U) * 1000000L);
+    while (nanosleep(&ts, &ts) < 0 && errno == EINTR) {}
+}
+
 static void fill_pcr7_selection(TPML_PCR_SELECTION *pcrSel) {
     memset(pcrSel, 0, sizeof(*pcrSel));
     pcrSel->count = 1;
@@ -215,19 +226,26 @@ static TSS2_RC create_primary_storage_key(ESYS_CONTEXT *ctx, ESYS_TR *primaryHan
     TPML_PCR_SELECTION creationPCR;
     memset(&creationPCR, 0, sizeof(creationPCR));
 
-    TSS2_RC rc = Esys_CreatePrimary(
-        ctx,
-        ESYS_TR_RH_OWNER,
-        ESYS_TR_PASSWORD,
-        ESYS_TR_NONE,
-        ESYS_TR_NONE,
-        &inSensitivePrimary,
-        &inPublic,
-        &outsideInfo,
-        &creationPCR,
-        primaryHandle,
-        NULL, NULL, NULL, NULL
-    );
+    TSS2_RC rc = TSS2_RC_SUCCESS;
+    for (int attempt = 0; attempt <= TPM_TRANSIENT_MAX_RETRIES; attempt++) {
+        rc = Esys_CreatePrimary(
+            ctx,
+            ESYS_TR_RH_OWNER,
+            ESYS_TR_PASSWORD,
+            ESYS_TR_NONE,
+            ESYS_TR_NONE,
+            &inSensitivePrimary,
+            &inPublic,
+            &outsideInfo,
+            &creationPCR,
+            primaryHandle,
+            NULL, NULL, NULL, NULL
+        );
+        if (rc == TSS2_RC_SUCCESS || !tpm_pin_rc_is_transient(rc) || attempt == TPM_TRANSIENT_MAX_RETRIES) {
+            break;
+        }
+        tpm_retry_backoff_ms(50U * (unsigned int)(attempt + 1));
+    }
 
     if (rc == TSS2_RC_SUCCESS) return rc;
 
@@ -248,19 +266,26 @@ static TSS2_RC create_primary_storage_key(ESYS_CONTEXT *ctx, ESYS_TR *primaryHan
     inPublic.publicArea.parameters.rsaDetail.scheme.scheme = TPM2_ALG_NULL;
     inPublic.publicArea.parameters.rsaDetail.keyBits = 2048;
 
-    return Esys_CreatePrimary(
-        ctx,
-        ESYS_TR_RH_OWNER,
-        ESYS_TR_PASSWORD,
-        ESYS_TR_NONE,
-        ESYS_TR_NONE,
-        &inSensitivePrimary,
-        &inPublic,
-        &outsideInfo,
-        &creationPCR,
-        primaryHandle,
-        NULL, NULL, NULL, NULL
-    );
+    for (int attempt = 0; attempt <= TPM_TRANSIENT_MAX_RETRIES; attempt++) {
+        rc = Esys_CreatePrimary(
+            ctx,
+            ESYS_TR_RH_OWNER,
+            ESYS_TR_PASSWORD,
+            ESYS_TR_NONE,
+            ESYS_TR_NONE,
+            &inSensitivePrimary,
+            &inPublic,
+            &outsideInfo,
+            &creationPCR,
+            primaryHandle,
+            NULL, NULL, NULL, NULL
+        );
+        if (rc == TSS2_RC_SUCCESS || !tpm_pin_rc_is_transient(rc) || attempt == TPM_TRANSIENT_MAX_RETRIES) {
+            break;
+        }
+        tpm_retry_backoff_ms(50U * (unsigned int)(attempt + 1));
+    }
+    return rc;
 }
 
 TSS2_RC tpm_engine_seal_key(ESYS_CONTEXT *ctx,
@@ -386,20 +411,28 @@ TSS2_RC tpm_engine_seal_key(ESYS_CONTEXT *ctx,
         return s_rc;
     }
 
-    rc = Esys_Create(
-        ctx,
-        primaryHandle,
-        authSession,
-        ESYS_TR_NONE,
-        ESYS_TR_NONE,
-        &inSensitive,
-        &inPublic,
-        &outsideInfo,
-        &creationPCR,
-        &outPrivate,
-        &outPublic,
-        NULL, NULL, NULL
-    );
+    for (int attempt = 0; attempt <= TPM_TRANSIENT_MAX_RETRIES; attempt++) {
+        outPrivate = NULL;
+        outPublic = NULL;
+        rc = Esys_Create(
+            ctx,
+            primaryHandle,
+            authSession,
+            ESYS_TR_NONE,
+            ESYS_TR_NONE,
+            &inSensitive,
+            &inPublic,
+            &outsideInfo,
+            &creationPCR,
+            &outPrivate,
+            &outPublic,
+            NULL, NULL, NULL
+        );
+        if (rc == TSS2_RC_SUCCESS || !tpm_pin_rc_is_transient(rc) || attempt == TPM_TRANSIENT_MAX_RETRIES) {
+            break;
+        }
+        tpm_retry_backoff_ms(50U * (unsigned int)(attempt + 1));
+    }
 
     tpm_pin_zero(&inSensitive, sizeof(inSensitive));
 
@@ -430,16 +463,22 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
     if (rc != TSS2_RC_SUCCESS) return rc;
 
     ESYS_TR itemHandle = ESYS_TR_NONE;
-    rc = Esys_Load(
-        ctx,
-        primaryHandle,
-        ESYS_TR_PASSWORD,
-        ESYS_TR_NONE,
-        ESYS_TR_NONE,
-        in_priv,
-        in_pub,
-        &itemHandle
-    );
+    for (int attempt = 0; attempt <= TPM_TRANSIENT_MAX_RETRIES; attempt++) {
+        rc = Esys_Load(
+            ctx,
+            primaryHandle,
+            ESYS_TR_PASSWORD,
+            ESYS_TR_NONE,
+            ESYS_TR_NONE,
+            in_priv,
+            in_pub,
+            &itemHandle
+        );
+        if (rc == TSS2_RC_SUCCESS || !tpm_pin_rc_is_transient(rc) || attempt == TPM_TRANSIENT_MAX_RETRIES) {
+            break;
+        }
+        tpm_retry_backoff_ms(50U * (unsigned int)(attempt + 1));
+    }
 
     if (rc != TSS2_RC_SUCCESS) {
         Esys_FlushContext(ctx, primaryHandle);
@@ -492,14 +531,21 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
                 if (rc == TSS2_RC_SUCCESS) {
                     rc = Esys_PolicyAuthValue(ctx, policySession, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE);
                     if (rc == TSS2_RC_SUCCESS) {
-                        rc = Esys_Unseal(
-                            ctx,
-                            itemHandle,
-                            policySession,
-                            ESYS_TR_NONE,
-                            ESYS_TR_NONE,
-                            &outData
-                        );
+                        for (int attempt = 0; attempt <= TPM_TRANSIENT_MAX_RETRIES; attempt++) {
+                            outData = NULL;
+                            rc = Esys_Unseal(
+                                ctx,
+                                itemHandle,
+                                policySession,
+                                ESYS_TR_NONE,
+                                ESYS_TR_NONE,
+                                &outData
+                            );
+                            if (rc == TSS2_RC_SUCCESS || !tpm_pin_rc_is_transient(rc) || attempt == TPM_TRANSIENT_MAX_RETRIES) {
+                                break;
+                            }
+                            tpm_retry_backoff_ms(50U * (unsigned int)(attempt + 1));
+                        }
                     }
                 }
             }
@@ -530,14 +576,21 @@ TSS2_RC tpm_engine_unseal_key(ESYS_CONTEXT *ctx,
             0xff);
 
         if (rc == TSS2_RC_SUCCESS) {
-            rc = Esys_Unseal(
-                ctx,
-                itemHandle,
-                authSession,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-                &outData
-            );
+            for (int attempt = 0; attempt <= TPM_TRANSIENT_MAX_RETRIES; attempt++) {
+                outData = NULL;
+                rc = Esys_Unseal(
+                    ctx,
+                    itemHandle,
+                    authSession,
+                    ESYS_TR_NONE,
+                    ESYS_TR_NONE,
+                    &outData
+                );
+                if (rc == TSS2_RC_SUCCESS || !tpm_pin_rc_is_transient(rc) || attempt == TPM_TRANSIENT_MAX_RETRIES) {
+                    break;
+                }
+                tpm_retry_backoff_ms(50U * (unsigned int)(attempt + 1));
+            }
         }
 
         if (authSession != ESYS_TR_NONE) {
@@ -695,24 +748,117 @@ void tpm_engine_detect_sysfs_hardware(const char *mfg, const char *vendor_str, t
     }
 }
 
+#define EFI_SECURE_BOOT_VAR_PATH "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+
+int tpm_engine_detect_secure_boot_from_file(const char *efivar_path) {
+    if (!efivar_path || efivar_path[0] == '\0') return -1;
+    int fd = open(efivar_path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return -1;
+
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        return -1;
+    }
+
+    uint8_t buf[8] = {0};
+    size_t total = 0;
+    while (total < sizeof(buf)) {
+        ssize_t n = read(fd, buf + total, sizeof(buf) - total);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (n == 0) break;
+        total += (size_t)n;
+    }
+    close(fd);
+
+    if (total < 5) return -1;
+    if (buf[4] == 1) return 1;
+    if (buf[4] == 0) return 0;
+    return -1;
+}
+
+int tpm_engine_detect_secure_boot(void) {
+    return tpm_engine_detect_secure_boot_from_file(EFI_SECURE_BOOT_VAR_PATH);
+}
+
+bool tpm_engine_is_pcr7_populated(ESYS_CONTEXT *ctx, bool *out_populated) {
+    if (out_populated) *out_populated = false;
+    if (!ctx) return false;
+
+    TPML_PCR_SELECTION pcrSel;
+    fill_pcr7_selection(&pcrSel);
+
+    TPML_PCR_SELECTION *pcrSelOut = NULL;
+    TPML_DIGEST *pcrValues = NULL;
+    UINT32 updateCounter = 0;
+    TSS2_RC rc = TSS2_RC_SUCCESS;
+
+    for (int attempt = 0; attempt <= TPM_TRANSIENT_MAX_RETRIES; attempt++) {
+        pcrSelOut = NULL;
+        pcrValues = NULL;
+        rc = Esys_PCR_Read(
+            ctx,
+            ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+            &pcrSel,
+            &updateCounter,
+            &pcrSelOut,
+            &pcrValues
+        );
+        if (rc == TSS2_RC_SUCCESS || !tpm_pin_rc_is_transient(rc) || attempt == TPM_TRANSIENT_MAX_RETRIES) {
+            break;
+        }
+        tpm_retry_backoff_ms(50U * (unsigned int)(attempt + 1));
+    }
+
+    bool ok = false;
+    bool nonzero = false;
+    if (rc == TSS2_RC_SUCCESS && pcrValues && pcrValues->count >= 1 && pcrValues->digests[0].size > 0) {
+        ok = true;
+        for (UINT16 i = 0; i < pcrValues->digests[0].size; i++) {
+            if (pcrValues->digests[0].buffer[i] != 0) {
+                nonzero = true;
+                break;
+            }
+        }
+    }
+
+    if (pcrSelOut) Esys_Free(pcrSelOut);
+    if (pcrValues) Esys_Free(pcrValues);
+    if (out_populated) *out_populated = nonzero;
+    return ok;
+}
+
 TSS2_RC tpm_engine_get_status(ESYS_CONTEXT *ctx, tpm_pin_status_t *status) {
     if (!ctx || !status) return TSS2_ESYS_RC_BAD_REFERENCE;
+
+    status->secure_boot_state = tpm_engine_detect_secure_boot();
 
     char mfg[32] = {0};
     char vendor_str[64] = {0};
 
     TPMI_YES_NO moreData = 0;
     TPMS_CAPABILITY_DATA *capData = NULL;
+    TSS2_RC rc = TSS2_RC_SUCCESS;
 
-    TSS2_RC rc = Esys_GetCapability(
-        ctx,
-        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-        TPM2_CAP_TPM_PROPERTIES,
-        TPM2_PT_MANUFACTURER,
-        8,
-        &moreData,
-        &capData
-    );
+    for (int attempt = 0; attempt <= TPM_TRANSIENT_MAX_RETRIES; attempt++) {
+        capData = NULL;
+        rc = Esys_GetCapability(
+            ctx,
+            ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+            TPM2_CAP_TPM_PROPERTIES,
+            TPM2_PT_MANUFACTURER,
+            8,
+            &moreData,
+            &capData
+        );
+        if (rc == TSS2_RC_SUCCESS || !tpm_pin_rc_is_transient(rc) || attempt == TPM_TRANSIENT_MAX_RETRIES) {
+            break;
+        }
+        tpm_retry_backoff_ms(50U * (unsigned int)(attempt + 1));
+    }
 
     if (rc != TSS2_RC_SUCCESS) {
         status->tpm_present = false;
@@ -767,24 +913,33 @@ TSS2_RC tpm_engine_get_status(ESYS_CONTEXT *ctx, tpm_pin_status_t *status) {
         snprintf(status->manufacturer, sizeof(status->manufacturer), "%.60s", mfg);
     }
 
-    /* Query DA lockout parameters */
+    /* Query DA lockout and hierarchy auth parameters */
     TPMS_CAPABILITY_DATA *varCap = NULL;
-    rc = Esys_GetCapability(
-        ctx,
-        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-        TPM2_CAP_TPM_PROPERTIES,
-        TPM2_PT_PERMANENT,
-        20,
-        &moreData,
-        &varCap
-    );
+    for (int attempt = 0; attempt <= TPM_TRANSIENT_MAX_RETRIES; attempt++) {
+        varCap = NULL;
+        rc = Esys_GetCapability(
+            ctx,
+            ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+            TPM2_CAP_TPM_PROPERTIES,
+            TPM2_PT_PERMANENT,
+            20,
+            &moreData,
+            &varCap
+        );
+        if (rc == TSS2_RC_SUCCESS || !tpm_pin_rc_is_transient(rc) || attempt == TPM_TRANSIENT_MAX_RETRIES) {
+            break;
+        }
+        tpm_retry_backoff_ms(50U * (unsigned int)(attempt + 1));
+    }
     if (rc == TSS2_RC_SUCCESS && varCap) {
         UINT32 count = varCap->data.tpmProperties.count;
         for (UINT32 i = 0; i < count; i++) {
             UINT32 prop = varCap->data.tpmProperties.tpmProperty[i].property;
             UINT32 val  = varCap->data.tpmProperties.tpmProperty[i].value;
             if (prop == TPM2_PT_PERMANENT) {
-                if (val & (1 << 9)) status->is_locked_out = true;
+                if (val & (1U << 0)) status->owner_auth_set = true;
+                if (val & (1U << 2)) status->lockout_auth_set = true;
+                if (val & (1U << 9)) status->is_locked_out = true;
             } else if (prop == TPM2_PT_LOCKOUT_COUNTER) {
                 status->failed_tries = val;
             } else if (prop == TPM2_PT_MAX_AUTH_FAIL) {
@@ -795,6 +950,12 @@ TSS2_RC tpm_engine_get_status(ESYS_CONTEXT *ctx, tpm_pin_status_t *status) {
             status->is_locked_out = true;
         }
         Esys_Free(varCap);
+    }
+
+    bool populated = false;
+    if (tpm_engine_is_pcr7_populated(ctx, &populated)) {
+        status->pcr7_checked = true;
+        status->pcr7_populated = populated;
     }
 
     tpm_engine_detect_sysfs_hardware(mfg, vendor_str, status);
